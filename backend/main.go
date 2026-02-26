@@ -52,6 +52,7 @@ func main() {
 		// Marketplace routes
 		v1.POST("/marketplace/list", assetHandler.ListAssetForSale)
 		v1.POST("/marketplace/transfer", assetHandler.TransferAsset)
+		v1.GET("/transactions", assetHandler.ListTransactions)
 	}
 
 	// Start server
