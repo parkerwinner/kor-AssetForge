@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -15,7 +16,7 @@ import (
 	"github.com/yourusername/kor-assetforge/apperrors"
 	"github.com/yourusername/kor-assetforge/models"
 	"github.com/yourusername/kor-assetforge/utils"
-	"go.uber.org/zap"
+	"github.com/yourusername/kor-assetforge/validator"
 	"gorm.io/gorm"
 )
 
@@ -34,33 +35,33 @@ func NewAssetHandler(db *gorm.DB, stellarClient *utils.StellarClient, redisClien
 }
 
 // TokenizeAsset handles formal asset tokenization with Soroban integration
+// @Summary Tokenize a new asset
+// @Description Create a new fractionalized asset on the Stellar network
+// @Tags assets
+// @Accept json
+// @Produce json
+// @Param asset body object true "Asset creation details"
+// @Success 201 {object} models.Asset
+// @Failure 400 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /assets/tokenize [post]
 func (h *AssetHandler) TokenizeAsset(c *gin.Context) {
-	var req struct {
-		IssuerAccount string            `json:"issuer_account" binding:"required"`
-		Name          string            `json:"name" binding:"required"`
-		Symbol        string            `json:"symbol" binding:"required"`
-		Description   string            `json:"description"`
-		AssetType     string            `json:"asset_type" binding:"required"`
-		TotalSupply   int64             `json:"total_supply" binding:"required,gt=0"`
-		Metadata      map[string]string `json:"metadata"`
-		Fractions     uint64            `json:"fractions"`
-	}
-
+	var req validator.TokenizeAssetRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		apperrors.AbortWithError(c, apperrors.Wrap(err, apperrors.CodeBadRequest, "Invalid request payload", http.StatusBadRequest))
 		return
 	}
 
-	// Validate Stellar address
-	if err := h.stellarClient.ValidateAddress(req.IssuerAccount); err != nil {
-		apperrors.AbortWithError(c, apperrors.New(apperrors.CodeBadRequest, "Invalid issuer account address", http.StatusBadRequest))
+	validator.SanitizeStruct(&req)
+	req.Symbol = strings.ToUpper(req.Symbol)
+
+	if err := validator.ValidateStruct(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Marshal metadata to JSON string
 	metadataJSON, _ := json.Marshal(req.Metadata)
 
-	// Create record in database
 	asset := models.Asset{
 		Name:         req.Name,
 		Symbol:       req.Symbol,
@@ -78,7 +79,6 @@ func (h *AssetHandler) TokenizeAsset(c *gin.Context) {
 		return
 	}
 
-	// Invalidate list cache
 	if h.redisClient != nil {
 		ctx := context.Background()
 		if err := h.redisClient.Del(ctx, "kor:asset:list:page1").Err(); err != nil {
@@ -86,19 +86,11 @@ func (h *AssetHandler) TokenizeAsset(c *gin.Context) {
 		}
 	}
 
-	// Invoke Soroban contract to mint tokens
-	// params: [asset_name, symbol, total_supply, issuer]
 	params := []interface{}{req.Name, req.Symbol, req.TotalSupply, req.IssuerAccount}
-	
-	// TODO: Get contract ID from config or dynamic deployment
 	contractID := "CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-	
+
 	txHash, err := h.stellarClient.InvokeContract(contractID, "mint", params)
 	if err != nil {
-		apperrors.Logger.Error("Contract invocation failed",
-			zap.String("symbol", asset.Symbol),
-			zap.Error(err),
-		)
 		c.JSON(http.StatusAccepted, gin.H{
 			"message": "Asset created in database but contract invocation failed",
 			"asset":   asset,
@@ -106,7 +98,6 @@ func (h *AssetHandler) TokenizeAsset(c *gin.Context) {
 		return
 	}
 
-	// Update asset status if successful
 	h.db.Model(&asset).Update("verified", true)
 
 	c.JSON(http.StatusCreated, gin.H{
@@ -117,6 +108,16 @@ func (h *AssetHandler) TokenizeAsset(c *gin.Context) {
 }
 
 // ListAssets returns all assets with pagination
+// @Summary List all assets
+// @Description Get a paginated list of all tokenized assets
+// @Tags assets
+// @Accept json
+// @Produce json
+// @Param page query int false "Page number" default(1)
+// @Param limit query int false "Page size" default(10)
+// @Success 200 {object} utils.Pagination
+// @Failure 500 {object} map[string]interface{}
+// @Router /assets [get]
 func (h *AssetHandler) ListAssets(c *gin.Context) {
 	cacheKey := "kor:asset:list:page1"
 
@@ -133,20 +134,26 @@ func (h *AssetHandler) ListAssets(c *gin.Context) {
 		}
 	}
 
-	var assets []models.Asset
-	var total int64
-	page, limit := utils.GetPaginationParams(c)
-
-	if err := utils.Paginate(h.db, page, limit, &total, &assets); err != nil {
-		apperrors.AbortWithError(c, apperrors.Wrap(err, apperrors.CodeDatabaseError, "Failed to fetch assets", http.StatusInternalServerError))
+	var query validator.PaginationQuery
+	if err := c.ShouldBindQuery(&query); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	paginationRes := utils.Pagination{
-		Limit: limit,
-		Page:  page,
-		Total: total,
-		Data:  assets,
+	page := query.Page
+	if page == 0 {
+		page = 1
+	}
+	limit := query.Limit
+	if limit == 0 {
+		limit = 10
+	}
+
+	var assets []models.Asset
+	var total int64
+	if err := utils.Paginate(h.db, page, limit, &total, &assets); err != nil {
+		apperrors.AbortWithError(c, apperrors.Wrap(err, apperrors.CodeDatabaseError, "Failed to fetch assets", http.StatusInternalServerError))
+		return
 	}
 
 	// Save to Redis (simplified: only cache page 1 default view for now to match upstream)
@@ -163,40 +170,67 @@ func (h *AssetHandler) ListAssets(c *gin.Context) {
 }
 
 // ListTransactions returns all transactions with pagination
+// @Summary List transactions
+// @Description Get a paginated list of all asset transactions
+// @Tags marketplace
+// @Accept json
+// @Produce json
+// @Param page query int false "Page number" default(1)
+// @Param limit query int false "Page size" default(10)
+// @Param asset_id query int false "Filter by asset ID"
+// @Success 200 {object} utils.Pagination
+// @Failure 500 {object} map[string]interface{}
+// @Router /transactions [get]
 func (h *AssetHandler) ListTransactions(c *gin.Context) {
-	var transactions []models.Transaction
-	var total int64
-	page, limit := utils.GetPaginationParams(c)
-
-	// Build query (allow filtering by asset_id if provided)
-	query := h.db.Model(&models.Transaction{}).Order("created_at desc")
-	if assetID := c.Query("asset_id"); assetID != "" {
-		query = query.Where("asset_id = ?", assetID)
-	}
-
-	if err := utils.Paginate(query, page, limit, &total, &transactions); err != nil {
-		apperrors.AbortWithError(c, apperrors.Wrap(err, apperrors.CodeDatabaseError, "Failed to fetch transactions", http.StatusInternalServerError))
+	var queryParams validator.TransactionQuery
+	if err := c.ShouldBindQuery(&queryParams); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, utils.Pagination{
-		Limit: limit,
-		Page:  page,
-		Total: total,
-		Data:  transactions,
-	})
+	page := queryParams.Page
+	if page == 0 {
+		page = 1
+	}
+	limit := queryParams.Limit
+	if limit == 0 {
+		limit = 10
+	}
+
+	var transactions []models.Transaction
+	var total int64
+	query := h.db.Model(&models.Transaction{}).Order("created_at desc")
+	if queryParams.AssetID != 0 {
+		query = query.Where("asset_id = ?", queryParams.AssetID)
+	}
+
+	paginationRes, err := utils.Paginate(query, c, page, limit, &total, &transactions)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch transactions"})
+		return
+	}
+
+	c.JSON(http.StatusOK, paginationRes)
 }
 
 // GetAsset returns a specific asset
+// @Summary Get asset details
+// @Description Get detailed information about a specific asset by its ID
+// @Tags assets
+// @Accept json
+// @Produce json
+// @Param id path int true "Asset ID"
+// @Success 200 {object} models.Asset
+// @Failure 404 {object} map[string]interface{}
+// @Router /assets/{id} [get]
 func (h *AssetHandler) GetAsset(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.ParseUint(idStr, 10, 32)
-	if err != nil {
-		apperrors.AbortWithError(c, apperrors.New(apperrors.CodeBadRequest, "Invalid asset ID", http.StatusBadRequest))
+	var uri validator.AssetIDUri
+	if err := c.ShouldBindUri(&uri); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid asset ID"})
 		return
 	}
 
-	cacheKey := fmt.Sprintf("kor:asset:detail:%d", id)
+	cacheKey := fmt.Sprintf("kor:asset:detail:%d", uri.ID)
 
 	// Try fetching from Redis first
 	if h.redisClient != nil {
@@ -212,12 +246,8 @@ func (h *AssetHandler) GetAsset(c *gin.Context) {
 	}
 
 	var asset models.Asset
-	if err := h.db.First(&asset, id).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			apperrors.AbortWithError(c, apperrors.New(apperrors.CodeNotFound, "Asset not found", http.StatusNotFound))
-		} else {
-			apperrors.AbortWithError(c, apperrors.Wrap(err, apperrors.CodeDatabaseError, "Failed to fetch asset", http.StatusInternalServerError))
-		}
+	if err := h.db.First(&asset, uri.ID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Asset not found"})
 		return
 	}
 
@@ -226,7 +256,7 @@ func (h *AssetHandler) GetAsset(c *gin.Context) {
 		if jsonData, err := json.Marshal(asset); err == nil {
 			ctx := context.Background()
 			if err := h.redisClient.Set(ctx, cacheKey, jsonData, 5*time.Minute).Err(); err != nil {
-				log.Printf("Warning: failed to cache detail for %d: %v", id, err)
+				log.Printf("Warning: failed to cache detail for %d: %v", uri.ID, err)
 			}
 		}
 	}
@@ -235,22 +265,37 @@ func (h *AssetHandler) GetAsset(c *gin.Context) {
 }
 
 // ListAssetForSale creates a marketplace listing
+// @Summary List asset for sale
+// @Description Create a new marketplace listing for a tokenized asset
+// @Tags marketplace
+// @Accept json
+// @Produce json
+// @Param listing body object true "Listing details"
+// @Success 201 {object} models.Listing
+// @Failure 400 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /marketplace/list [post]
 func (h *AssetHandler) ListAssetForSale(c *gin.Context) {
-	var req struct {
-		AssetID      uint   `json:"asset_id" binding:"required"`
-		SellerAddr   string `json:"seller_address" binding:"required"`
-		Amount       int64  `json:"amount" binding:"required,gt=0"`
-		PricePerUnit int64  `json:"price_per_unit" binding:"required,gt=0"`
-	}
-
+	var req validator.ListAssetSaleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		apperrors.AbortWithError(c, apperrors.Wrap(err, apperrors.CodeBadRequest, "Invalid request payload", http.StatusBadRequest))
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// TODO: Create on-chain listing and get listing ID
-	listingID := "listing_1"
+	validator.SanitizeStruct(&req)
+	if err := validator.ValidateStruct(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
+	// Ensure asset exists before creating a listing
+	var asset models.Asset
+	if err := h.db.First(&asset, req.AssetID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Asset not found"})
+		return
+	}
+
+	listingID := "listing_1"
 	listing := models.Listing{
 		AssetID:      req.AssetID,
 		SellerAddr:   req.SellerAddr,
@@ -265,7 +310,6 @@ func (h *AssetHandler) ListAssetForSale(c *gin.Context) {
 		return
 	}
 
-	// Invalidate the detail cache if it exists (since a listing conceptually updates the asset)
 	if h.redisClient != nil {
 		ctx := context.Background()
 		detailKey := fmt.Sprintf("kor:asset:detail:%d", req.AssetID)
@@ -278,22 +322,37 @@ func (h *AssetHandler) ListAssetForSale(c *gin.Context) {
 }
 
 // TransferAsset handles asset transfers
+// @Summary Transfer asset ownership
+// @Description Transfer asset tokens from one address to another
+// @Tags marketplace
+// @Accept json
+// @Produce json
+// @Param transfer body object true "Transfer details"
+// @Success 200 {object} models.Transaction
+// @Failure 400 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /marketplace/transfer [post]
 func (h *AssetHandler) TransferAsset(c *gin.Context) {
-	var req struct {
-		AssetID     uint   `json:"asset_id" binding:"required"`
-		FromAddress string `json:"from_address" binding:"required"`
-		ToAddress   string `json:"to_address" binding:"required"`
-		Amount      int64  `json:"amount" binding:"required,gt=0"`
-	}
-
+	var req validator.TransferAssetRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		apperrors.AbortWithError(c, apperrors.Wrap(err, apperrors.CodeBadRequest, "Invalid request payload", http.StatusBadRequest))
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// TODO: Execute on-chain transfer
-	txHash := "tx_hash_placeholder"
+	validator.SanitizeStruct(&req)
+	if err := validator.ValidateStruct(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
+	// Ensure asset exists before recording the transfer
+	var asset models.Asset
+	if err := h.db.First(&asset, req.AssetID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Asset not found"})
+		return
+	}
+
+	txHash := "tx_hash_placeholder"
 	transaction := models.Transaction{
 		AssetID:     req.AssetID,
 		FromAddress: req.FromAddress,
@@ -308,7 +367,6 @@ func (h *AssetHandler) TransferAsset(c *gin.Context) {
 		return
 	}
 
-	// Invalidate appropriate caches after transfer
 	if h.redisClient != nil {
 		ctx := context.Background()
 		detailKey := fmt.Sprintf("kor:asset:detail:%d", req.AssetID)

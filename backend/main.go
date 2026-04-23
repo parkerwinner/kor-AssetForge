@@ -3,21 +3,36 @@ package main
 import (
 	"log"
 	"os"
-	"strconv"
-	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
-	"golang.org/x/time/rate"
-
-	"github.com/yourusername/kor-assetforge/backend/apperrors"
-	"github.com/yourusername/kor-assetforge/backend/config"
-	"github.com/yourusername/kor-assetforge/backend/handlers"
-	"github.com/yourusername/kor-assetforge/backend/handlers/auth"
-	"github.com/yourusername/kor-assetforge/backend/models"
-	"github.com/yourusername/kor-assetforge/backend/utils"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
+	"github.com/ulule/limiter/v3"
+	_ "github.com/yourusername/kor-assetforge/docs"
+	"github.com/yourusername/kor-assetforge/config"
+	"github.com/yourusername/kor-assetforge/handlers"
+	"github.com/yourusername/kor-assetforge/middleware"
+	"github.com/yourusername/kor-assetforge/validator"
+	"github.com/yourusername/kor-assetforge/utils"
 )
 
+// @title kor-AssetForge API
+// @version 0.1.0
+// @description Decentralized marketplace for tokenizing and trading real-world assets on Stellar.
+// @termsOfService http://swagger.io/terms/
+
+// @contact.name API Support
+// @contact.url http://www.swagger.io/support
+// @contact.email support@swagger.io
+
+// @license.name MIT
+// @license.url https://opensource.org/licenses/MIT
+
+// @host localhost:8080
+// @BasePath /api/v1
 func main() {
 	// Load environment variables
 	if err := godotenv.Load(); err != nil {
@@ -46,95 +61,71 @@ func main() {
 		defer redisClient.Close()
 	}
 
-	// Initialize cache
-	var cache *utils.Cache
+	// Initialize Rate Limiter (e.g., 100 requests per minute)
+	var rateLimiterMiddleware gin.HandlerFunc
 	if redisClient != nil {
-		cache = utils.NewCache(redisClient)
+		rl, err := handlers.NewRateLimiter(redisClient, limiter.Rate{
+			Period: time.Minute,
+			Limit:  100,
+		})
+		if err != nil {
+			log.Printf("Warning: Failed to initialize rate limiter: %v", err)
+		} else {
+			rateLimiterMiddleware = rl.Middleware()
+		}
 	}
-
-	// Setup authentication configuration
-	authConfig := &auth.AuthConfig{
-		JWTSecret:           getEnvOrDefault("JWT_SECRET", "your-super-secret-jwt-key-change-in-production"),
-		JWTExpirationHours:  getEnvIntOrDefault("JWT_EXPIRATION_HOURS", 24),
-		RefreshTokenHours:   getEnvIntOrDefault("REFRESH_TOKEN_HOURS", 168), // 7 days
-		EmailTokenHours:     getEnvIntOrDefault("EMAIL_TOKEN_HOURS", 24),
-		PasswordResetHours:  getEnvIntOrDefault("PASSWORD_RESET_HOURS", 1),
-		BcryptCost:          getEnvIntOrDefault("BCRYPT_COST", 12),
-	}
-
-	// Initialize auth components
-	authHandler := auth.NewAuthHandler(db, authConfig, cache)
-	authMiddleware := auth.NewAuthMiddleware(authConfig.JWTSecret)
-
-	// Setup rate limiter for auth endpoints (5 requests per minute, burst of 10)
-	authRateLimiter := auth.NewAuthRateLimiter(rate.Limit(5.0/60.0), 10)
 
 	// Setup router
 	router := gin.New() // Use gin.New() instead of gin.Default() to avoid default logger/recovery
 
-	debugMode := strings.EqualFold(os.Getenv("DEBUG_MODE"), "true")
+	if err := validator.Init(); err != nil {
+		log.Fatalf("Failed to initialize validator: %v", err)
+	}
 
 	// Use custom enhanced middleware
 	router.Use(
 		handlers.RequestLogger(),
-		apperrors.ErrorHandler(debugMode),
+		handlers.GlobalErrorHandler(),
+		middleware.RequestSizeLimiter(2<<20),
+		middleware.RequireJSON(),
+		middleware.RateLimit(20, time.Minute),
+		middleware.CSRFProtection(os.Getenv("CSRF_SECRET")),
 	)
 
-	router.GET("/metrics", apperrors.MetricsHandler)
+	// Health check handlers
+	healthHandler := handlers.NewHealthHandler(db, redisClient, stellarClient)
+	router.GET("/health", healthHandler.LivenessCheck)
+	router.GET("/health/ready", healthHandler.ReadinessCheck)
+	router.GET("/health/live", healthHandler.LivenessCheck)
 
-	// Health check endpoint
-	router.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{
-			"status":  "healthy",
-			"service": "kor-AssetForge API",
-			"version": "0.1.0",
-		})
-	})
+	// Metrics endpoint
+	// @Summary Prometheus metrics
+	// @Description Get service metrics in Prometheus format
+	// @Tags monitoring
+	// @Produce plain
+	// @Success 200 {string} string "Prometheus metrics"
+	// @Router /metrics [get]
+	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
+	// Swagger documentation
+	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	// API v1 routes
 	v1 := router.Group("/api/v1")
 	{
-		// Authentication routes (public)
-		authGroup := v1.Group("/auth")
-		authGroup.Use(authRateLimiter.GeneralAuthRateLimit())
-		{
-			authGroup.POST("/register", authRateLimiter.RegisterRateLimit(), authHandler.Register)
-			authGroup.POST("/login", authRateLimiter.LoginRateLimit(), authHandler.Login)
-			authGroup.POST("/refresh", authHandler.RefreshToken)
-			authGroup.POST("/verify-email", authRateLimiter.EmailVerificationRateLimit(), authHandler.VerifyEmail)
-			authGroup.POST("/forgot-password", authRateLimiter.PasswordResetRateLimit(), authHandler.ForgotPassword)
-			authGroup.POST("/reset-password", authHandler.ResetPassword)
-		}
+		// Asset routes
+		assetHandler := handlers.NewAssetHandler(db, stellarClient, redisClient)
+		v1.POST("/assets/tokenize", assetHandler.TokenizeAsset)
+		v1.POST("/assets", assetHandler.TokenizeAsset) 
+		v1.GET("/assets", assetHandler.ListAssets)
+		v1.GET("/assets/:id", assetHandler.GetAsset)
 
-		// Protected routes
-		protected := v1.Group("")
-		protected.Use(authMiddleware.JWTAuth())
-		{
-			// User profile
-			protected.GET("/profile", authHandler.GetProfile)
-			protected.POST("/logout", authHandler.Logout)
+		// Marketplace routes
+		v1.POST("/marketplace/list", assetHandler.ListAssetForSale)
+		v1.POST("/marketplace/transfer", assetHandler.TransferAsset)
+		v1.GET("/transactions", assetHandler.ListTransactions)
 
-			// Asset routes (require authentication)
-			assetHandler := handlers.NewAssetHandler(db, stellarClient, redisClient)
-			protected.POST("/assets/tokenize", assetHandler.TokenizeAsset)
-			protected.POST("/assets", assetHandler.TokenizeAsset)
-			protected.GET("/assets", assetHandler.ListAssets)
-			protected.GET("/assets/:id", assetHandler.GetAsset)
-
-			// Marketplace routes
-			protected.POST("/marketplace/list", assetHandler.ListAssetForSale)
-			protected.POST("/marketplace/transfer", assetHandler.TransferAsset)
-			protected.GET("/transactions", assetHandler.ListTransactions)
-
-			// Admin only routes
-			admin := protected.Group("")
-			admin.Use(authMiddleware.RequireRole(models.RoleAdmin))
-			{
-				// Admin-specific routes can be added here
-			}
-		}
-
-		// Webhook routes (public but with HMAC verification)
+		// Webhook routes
 		webhookHandler := handlers.NewWebhookHandler(db)
 		router.POST("/webhooks/stellar-events", webhookHandler.HandleStellarEvent)
 	}

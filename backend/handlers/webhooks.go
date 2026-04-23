@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/yourusername/kor-assetforge/apperrors"
 	"github.com/yourusername/kor-assetforge/models"
+	"github.com/yourusername/kor-assetforge/validator"
 	"gorm.io/gorm"
 )
 
@@ -27,17 +28,27 @@ func NewWebhookHandler(db *gorm.DB) *WebhookHandler {
 
 // StellarEvent represents the payload from Stellar Horizon events
 type StellarEvent struct {
-	ID          string          `json:"id"`
-	PagingToken string          `json:"paging_token"`
-	Type        string          `json:"type"`
-	ContractID  string          `json:"contract_id"`
-	Topic       []string        `json:"topic"`
-	Value       json.RawMessage `json:"value"`
-	Ledger      int32           `json:"ledger"`
-	CreatedAt   string          `json:"created_at"`
+	ID          string          `json:"id" binding:"required,no_html"`
+	PagingToken string          `json:"paging_token" binding:"required,no_html"`
+	Type        string          `json:"type" binding:"required,no_html"`
+	ContractID  string          `json:"contract_id" binding:"required,no_html"`
+	Topic       []string        `json:"topic" binding:"required,dive,no_html"`
+	Value       json.RawMessage `json:"value" binding:"required"`
+	Ledger      int32           `json:"ledger" binding:"required"`
+	CreatedAt   string          `json:"created_at" binding:"required,no_html"`
 }
 
 // HandleStellarEvent processes events received from Stellar Horizon
+// @Summary Handle Stellar events
+// @Description Webhook endpoint for receiving and processing events from the Stellar network
+// @Tags webhooks
+// @Accept json
+// @Produce json
+// @Param X-Stellar-Signature header string false "HMAC signature for verification"
+// @Param event body StellarEvent true "Stellar event payload"
+// @Success 200 {object} map[string]interface{}
+// @Failure 401 {object} map[string]interface{}
+// @Router /webhooks/stellar-events [post]
 func (h *WebhookHandler) HandleStellarEvent(c *gin.Context) {
 	// 1. Verify Signature
 	signature := c.GetHeader("X-Stellar-Signature")
@@ -58,6 +69,8 @@ func (h *WebhookHandler) HandleStellarEvent(c *gin.Context) {
 		apperrors.AbortWithError(c, apperrors.Wrap(err, apperrors.CodeBadRequest, "Invalid event payload", http.StatusBadRequest))
 		return
 	}
+
+	validator.SanitizeStruct(&event)
 
 	// 2. Idempotency Check
 	// In a real app, we would store event IDs in a separate table
