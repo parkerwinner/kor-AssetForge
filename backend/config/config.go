@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/yourusername/kor-assetforge/models"
+	"github.com/yourusername/kor-assetforge/backend/models"
 	"github.com/yourusername/kor-assetforge/utils"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -29,6 +29,7 @@ func InitDB() (*gorm.DB, error) {
 		&models.Transaction{},
 		&models.User{},
 		&models.UserBalance{},
+		&models.UserSession{},
 	); err != nil {
 		return nil, fmt.Errorf("failed to migrate database: %w", err)
 	}
