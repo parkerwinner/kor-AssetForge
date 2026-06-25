@@ -326,6 +326,10 @@ func SetupRouter(db *gorm.DB) *gin.Engine {
 	// Pre-launch the hub
 	_ = handlers.GetHub()
 
+	// Initialize and start event indexer (#180)
+	eventIndexer := services.NewEventIndexer(db)
+	eventIndexer.Start()
+
 	return router
 }
 

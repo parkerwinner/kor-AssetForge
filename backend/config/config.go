@@ -53,6 +53,9 @@ func InitDB() (*gorm.DB, error) {
 		&models.ComplianceAuditLog{},
 		// Batch transaction model (#106)
 		&models.BatchTransaction{},
+		// Event indexer models (#180)
+		&models.IndexedEvent{},
+		&models.EventCheckpoint{},
 	); err != nil {
 		return nil, fmt.Errorf("failed to auto-migrate models: %w", err)
 	}
