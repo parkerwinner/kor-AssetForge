@@ -10,7 +10,6 @@ import (
 	"net/smtp"
 	"os"
 	"strings"
-	"time"
 )
 
 type EmailProvider string

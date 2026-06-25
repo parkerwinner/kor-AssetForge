@@ -49,8 +49,8 @@ func (i *ElasticsearchIndexer) IndexAssetsBulk(ctx context.Context, assets []*mo
 	}
 
 	res, err := i.client.Bulk(
+		strings.NewReader(bulkRequest.String()),
 		i.client.Bulk.WithContext(ctx),
-		i.client.Bulk.WithBody(strings.NewReader(bulkRequest.String())),
 	)
 
 	if err != nil || res.IsError() {

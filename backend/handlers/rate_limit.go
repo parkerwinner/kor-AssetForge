@@ -10,6 +10,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/ulule/limiter/v3"
 	sredis "github.com/ulule/limiter/v3/drivers/store/redis"
+	"go.uber.org/zap"
 )
 
 // RateLimiter holds the rate limiting logic
@@ -51,7 +52,7 @@ func (rl *RateLimiter) Middleware() gin.HandlerFunc {
 
 		context, err := rl.limiter.Get(c, key)
 		if err != nil {
-			Logger.Error("Rate limiter error", fmt.Errorf("failed to get limit for key %s: %w", key, err))
+			Logger.Error("Rate limiter error", zap.Error(fmt.Errorf("failed to get limit for key %s: %w", key, err)))
 			c.Next()
 			return
 		}

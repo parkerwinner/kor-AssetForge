@@ -3,11 +3,9 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -155,7 +153,8 @@ func (h *AssetHandler) ListAssets(c *gin.Context) {
 
 	var assets []models.Asset
 	var total int64
-	if err := utils.Paginate(h.db, page, limit, &total, &assets); err != nil {
+	paginationRes, err := utils.Paginate(h.db, c, page, limit, &total, &assets)
+	if err != nil {
 		apperrors.AbortWithError(c, apperrors.Wrap(err, apperrors.CodeDatabaseError, "Failed to fetch assets", http.StatusInternalServerError))
 		return
 	}
