@@ -819,6 +819,63 @@ impl StakingRewards {
             panic!("caller is not admin");
         }
     }
+
+    pub fn set_pool_capacity(env: Env, admin: Address, asset_id: u64, max_capacity: i128) {
+        Self::require_admin(&env, &admin);
+        let cap = PoolCapacity { max_capacity, is_full: false };
+        env.storage().persistent().set(&StakingDataKey::PoolCapacity(asset_id), &cap);
+        env.events().publish(
+            (Symbol::new(&env, "pool_capacity_set"), asset_id),
+            max_capacity,
+        );
+    }
+
+    pub fn get_pool_capacity(env: Env, asset_id: u64) -> Option<PoolCapacity> {
+        env.storage().persistent().get(&StakingDataKey::PoolCapacity(asset_id))
+    }
+
+    pub fn join_waitlist(env: Env, staker: Address, asset_id: u64, amount: i128) {
+        staker.require_auth();
+        let list_key = Symbol::new(&env, "waitlist");
+        let mut list: Vec<WaitlistEntry> = env.storage().persistent()
+            .get(&list_key).unwrap_or(Vec::new(&env));
+        list.push_back(WaitlistEntry {
+            staker: staker.clone(),
+            asset_id,
+            amount,
+            queued_at: env.ledger().timestamp(),
+        });
+        env.storage().persistent().set(&list_key, &list);
+        env.events().publish(
+            (Symbol::new(&env, "waitlist_joined"), staker),
+            (asset_id, amount),
+        );
+    }
+
+    pub fn get_waitlist(env: Env, _asset_id: u64) -> Vec<WaitlistEntry> {
+        let list_key = Symbol::new(&env, "waitlist");
+        env.storage().persistent().get(&list_key).unwrap_or(Vec::new(&env))
+    }
+
+    pub fn rebalance_pool(env: Env, admin: Address, asset_id: u64) -> Vec<Address> {
+        Self::require_admin(&env, &admin);
+        let list_key = Symbol::new(&env, "waitlist");
+        let list: Vec<WaitlistEntry> = env.storage().persistent()
+            .get(&list_key).unwrap_or(Vec::new(&env));
+        let mut promoted: Vec<Address> = Vec::new(&env);
+        for i in 0..list.len() {
+            let entry = list.get(i).unwrap();
+            if entry.asset_id == asset_id {
+                promoted.push_back(entry.staker);
+            }
+        }
+        env.storage().persistent().set(&list_key, &Vec::<WaitlistEntry>::new(&env));
+        env.events().publish(
+            (Symbol::new(&env, "pool_rebalanced"), admin),
+            (asset_id, promoted.len() as u32),
+        );
+        promoted
+    }
 }
 
 // ============================================================================
