@@ -4,6 +4,7 @@ use crate::emergency_control::{EmergencyControlClient, PauseScope};
 use crate::governance::GovernanceClient;
 use crate::oracle::{OracleClient, AggregatedPrice};
 use crate::reputation::ReputationContractClient;
+use crate::royalty::RoyaltyClient;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -207,6 +208,7 @@ pub enum BuyBackDataKey {
     HistoryKey,
     GovernanceContractKey,
     ReputationContractKey,
+    RoyaltyContractKey,
 }
 
 /// Storage keys for the referral system.
@@ -407,6 +409,16 @@ impl Marketplace {
                 .unwrap_or(buyer.clone());
             let rep_client = ReputationContractClient::new(&env, &rep_addr);
             rep_client.record_trade_completion(&admin, &buyer);
+        }
+
+        // Record royalty payment if royalty contract is configured
+        if let Some(royalty_addr) = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&BuyBackDataKey::RoyaltyContractKey)
+        {
+            let royalty_client = RoyaltyClient::new(&env, &royalty_addr);
+            royalty_client.record_royalty(&asset_id, &buyer, &amount);
         }
 
         true
@@ -1483,6 +1495,15 @@ impl Marketplace {
         env.storage()
             .instance()
             .set(&BuyBackDataKey::ReputationContractKey, &reputation_contract);
+    }
+
+    /// Set or update the royalty contract address. BBAdmin only.
+    pub fn set_royalty_contract(env: Env, admin: Address, royalty_contract: Address) {
+        admin.require_auth();
+        Self::require_buyback_admin(&env, &admin);
+        env.storage()
+            .instance()
+            .set(&BuyBackDataKey::RoyaltyContractKey, &royalty_contract);
     }
 
     /// Pause or unpause the buy-back system. BBAdmin only.
