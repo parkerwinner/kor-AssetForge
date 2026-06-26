@@ -56,6 +56,11 @@ func InitDB() (*gorm.DB, error) {
 		// Event indexer models (#180)
 		&models.IndexedEvent{},
 		&models.EventCheckpoint{},
+		// GDPR export models (#178)
+		&models.ExportJob{},
+		// Dynamic fee config models (#177)
+		&models.FeeConfig{},
+		&models.FeeAuditLog{},
 	); err != nil {
 		return nil, fmt.Errorf("failed to auto-migrate models: %w", err)
 	}

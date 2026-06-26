@@ -155,6 +155,18 @@ func SetupRouter(db *gorm.DB) *gin.Engine {
 				adminGroup.POST("/staking/distribute", func(c *gin.Context) {
 					handlers.NewStakingHandler(db).DistributeRewards(c)
 				})
+				// Dynamic fee configuration admin endpoints (#177)
+				feeService := services.NewFeeService(db)
+				feeAdminHandler := handlers.NewFeeAdminHandler(db, feeService)
+				feeAdminGroup := adminGroup.Group("/fees")
+				{
+					feeAdminGroup.POST("", feeAdminHandler.CreateFeeConfig)
+					feeAdminGroup.GET("", feeAdminHandler.ListFeeConfigs)
+					feeAdminGroup.GET("/:id", feeAdminHandler.GetFeeConfig)
+					feeAdminGroup.PUT("/:id", feeAdminHandler.UpdateFeeConfig)
+					feeAdminGroup.DELETE("/:id", feeAdminHandler.DeactivateFeeConfig)
+					feeAdminGroup.GET("/:id/audit", feeAdminHandler.GetFeeAuditLog)
+				}
 			}
 		}
 
@@ -297,19 +309,28 @@ func SetupRouter(db *gorm.DB) *gin.Engine {
 
 		// Legal compliance routes
 		legalHandler := handlers.NewLegalHandler(db)
+		gdprExportService := services.NewDataExportService(db, emailService)
+		gdprHandler := handlers.NewGDPRHandler(db, gdprExportService)
+
 		legalGroup := v1.Group("/legal")
 		{
 			legalGroup.GET("/:type", legalHandler.GetActiveDocument)
 			legalGroup.GET("/:type/versions", legalHandler.ListDocumentVersions)
+			legalGroup.GET("/gdpr/export/download/:token", gdprHandler.DownloadExport)
 		}
 		legalProtected := protected.Group("/legal")
 		{
 			legalProtected.POST("/consent", legalHandler.RecordConsent)
 			legalProtected.GET("/consent/history", legalHandler.GetConsentHistory)
 			legalProtected.GET("/consent/pending", legalHandler.CheckPendingConsents)
-			legalProtected.POST("/gdpr/export", legalHandler.RequestDataExport)
-			legalProtected.GET("/gdpr/export/:id", legalHandler.GetDataExportStatus)
+			legalProtected.POST("/gdpr/export", gdprHandler.RequestDataExport)
+			legalProtected.GET("/gdpr/export/:id", gdprHandler.GetDataExportStatus)
 		}
+
+		// Public fee endpoints - preview and active config (#177)
+		feePublicHandler := handlers.NewFeeAdminHandler(db, services.NewFeeService(db))
+		v1.GET("/fees/preview", feePublicHandler.PreviewFee)
+		v1.GET("/fees/active", feePublicHandler.GetActiveFee)
 	}
 
 	// API v2 routes
