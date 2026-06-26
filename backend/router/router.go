@@ -259,6 +259,8 @@ func SetupRouter(db *gorm.DB) *gin.Engine {
 		v1.POST("/liquidity/pools", liquidityHandler.CreatePool)
 		v1.GET("/liquidity/pools", liquidityHandler.ListPools)
 		v1.GET("/liquidity/pools/:id", liquidityHandler.GetPool)
+		v1.GET("/liquidity/pools/:id/analytics", liquidityHandler.GetPoolAnalytics)
+		v1.GET("/liquidity/pools/compare", liquidityHandler.ComparePools)
 		v1.POST("/liquidity/add", liquidityHandler.AddLiquidity)
 		v1.POST("/liquidity/remove", liquidityHandler.RemoveLiquidity)
 		v1.POST("/liquidity/swap", liquidityHandler.Swap)
