@@ -4,6 +4,7 @@ use crate::emergency_control::{EmergencyControlClient, PauseScope};
 use crate::governance::GovernanceClient;
 use crate::oracle::{OracleClient, AggregatedPrice};
 use crate::reputation::ReputationContractClient;
+use crate::whitelist::WhitelistClient;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -194,6 +195,7 @@ pub enum MarketplaceDataKey {
     Oracle,
     BundleListings,
     BundleListing(u64),
+    WhitelistContract,
 }
 
 /// Storage keys for buy-back and burn system.
@@ -308,6 +310,8 @@ impl Marketplace {
 
         // Enforce whitelisting if asset is private
         Self::require_whitelisted_if_private(&env, asset_id, &seller);
+        // Enforce accredited investor check if whitelist contract is configured
+        Self::require_accredited_investor(&env, &seller);
 
         // Block new listings for deprecated assets.
         if let Some(cfg) = env.storage().persistent().get::<_, AssetConfig>(&MarketplaceDataKey::AssetConfig(asset_id)) {
@@ -387,6 +391,8 @@ impl Marketplace {
 
         // Enforce whitelisting if asset is private
         Self::require_whitelisted_if_private(&env, asset_id, &buyer);
+        // Enforce accredited investor check if whitelist contract is configured
+        Self::require_accredited_investor(&env, &buyer);
 
         // Collect fee and credit referral reward
         if env.storage().instance().has(&BuyBackDataKey::BuyBackConfigKey) {
@@ -769,6 +775,33 @@ impl Marketplace {
         if Self::is_private(env.clone(), asset_id) {
             if !Self::is_whitelisted(env.clone(), asset_id, user.clone()) {
                 panic!("user not whitelisted for private asset");
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Accredited Investor Whitelist Contract Integration
+    // -----------------------------------------------------------------------
+
+    /// Set the external whitelist contract for accredited investor verification.
+    pub fn set_whitelist_contract(env: Env, admin: Address, whitelist_addr: Address) {
+        Self::require_admin(&env, &admin);
+        env.storage().instance().set(&MarketplaceDataKey::WhitelistContract, &whitelist_addr);
+        env.events().publish((Symbol::new(&env, "whitelist_contract_set"),), whitelist_addr);
+    }
+
+    /// Get the external whitelist contract address.
+    pub fn get_whitelist_contract(env: Env) -> Option<Address> {
+        env.storage().instance().get(&MarketplaceDataKey::WhitelistContract)
+    }
+
+    /// Verify that the user is an accredited investor via the whitelist contract.
+    /// Skips check if no whitelist contract is configured.
+    fn require_accredited_investor(env: &Env, user: &Address) {
+        if let Some(wl_addr) = env.storage().instance().get::<_, Address>(&MarketplaceDataKey::WhitelistContract) {
+            let wl_client = WhitelistClient::new(env, &wl_addr);
+            if !wl_client.is_whitelisted(user) {
+                panic!("user not accredited investor");
             }
         }
     }
