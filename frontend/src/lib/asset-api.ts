@@ -18,10 +18,34 @@ export interface TransactionEntry {
   from: string;
   to: string;
   amount: number;
+  price?: number;
+  fee?: number;
   assetId: string;
+  assetName?: string;
+  assetSymbol?: string;
   timestamp: number;
   txHash: string;
   status: "completed" | "pending" | "failed";
+}
+
+export interface UserTransactionParams {
+  search?: string;
+  type?: string;
+  status?: string;
+  startDate?: string;
+  endDate?: string;
+  minAmount?: string;
+  maxAmount?: string;
+  page?: number;
+  limit?: number;
+  cursor?: string;
+}
+
+export interface TransactionPage {
+  transactions: TransactionEntry[];
+  total: number;
+  hasMore: boolean;
+  nextCursor?: string;
 }
 
 export interface AssetDetail {
@@ -175,6 +199,29 @@ class AssetApiService {
     if (endDate) params.set("end", endDate);
     const res = await fetch(`${this.backendUrl}/api/v1/dashboard/export?${params}`);
     if (!res.ok) throw new Error("Failed to export transactions");
+    return res.blob();
+  }
+
+  async getUserTransactions(params: UserTransactionParams = {}): Promise<TransactionPage> {
+    const query = new URLSearchParams();
+    if (params.search) query.set("q", params.search);
+    if (params.type) query.set("type", params.type);
+    if (params.status) query.set("status", params.status);
+    if (params.startDate) query.set("start", params.startDate);
+    if (params.endDate) query.set("end", params.endDate);
+    if (params.minAmount) query.set("min_amount", params.minAmount);
+    if (params.maxAmount) query.set("max_amount", params.maxAmount);
+    if (params.page !== undefined) query.set("page", String(params.page));
+    if (params.limit) query.set("limit", String(params.limit));
+    if (params.cursor) query.set("cursor", params.cursor);
+    const res = await fetch(`${this.backendUrl}/api/v1/user/transactions?${query}`);
+    if (!res.ok) throw new Error("Failed to fetch user transactions");
+    return res.json();
+  }
+
+  async getTransactionReceipt(txId: string): Promise<Blob> {
+    const res = await fetch(`${this.backendUrl}/api/v1/user/transactions/${txId}/receipt`);
+    if (!res.ok) throw new Error("Failed to fetch transaction receipt");
     return res.blob();
   }
 
