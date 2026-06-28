@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { StellarWallet } from '@/lib/stellar'
 import { truncateAddress } from '@/lib/utils'
-import { Wallet, Home, Search, User, FileText } from 'lucide-react'
+import { Wallet, Home, Search, User, FileText, History } from 'lucide-react'
 
 interface HeaderProps {
   wallet?: StellarWallet
@@ -37,6 +37,10 @@ export function Header({ wallet }: HeaderProps) {
                   <Link href="/dashboard" className="flex items-center space-x-1 text-sm font-medium hover:text-primary">
                     <User className="h-4 w-4" aria-hidden="true" />
                     <span>Dashboard</span>
+                  </Link>
+                  <Link href="/transactions" className="flex items-center space-x-1 text-sm font-medium hover:text-primary">
+                    <History className="h-4 w-4" aria-hidden="true" />
+                    <span>Transactions</span>
                   </Link>
                   <Link href="/kyc" className="flex items-center space-x-1 text-sm font-medium hover:text-primary">
                     <FileText className="h-4 w-4" aria-hidden="true" />
