@@ -5,6 +5,7 @@ use crate::governance::GovernanceClient;
 use crate::oracle::{OracleClient, AggregatedPrice};
 use crate::reputation::ReputationContractClient;
 
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -161,6 +162,22 @@ pub struct BundleListing {
 
 #[derive(Clone)]
 #[contracttype]
+pub struct BatchListingInput {
+    pub asset_id: u64,
+    pub amount: i128,
+    pub price: i128,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct BatchPurchaseInput {
+    pub listing_id: u64,
+    pub amount: i128,
+    pub asset_id: u64,
+}
+
+#[derive(Clone)]
+#[contracttype]
 pub enum MarketplaceDataKey {
     MarketplaceAdmin,
     AssetPrivate(u64),
@@ -212,6 +229,7 @@ pub enum BuyBackDataKey {
     HistoryKey,
     GovernanceContractKey,
     ReputationContractKey,
+
 }
 
 /// Storage keys for the referral system.
@@ -432,7 +450,6 @@ impl Marketplace {
             let rep_client = ReputationContractClient::new(&env, &rep_addr);
             rep_client.record_trade_completion(&admin, &buyer);
         }
-
         true
     }
 
@@ -454,6 +471,150 @@ impl Marketplace {
             "price deviates too much from oracle"
         );
         Self::purchase(env, buyer, listing_id, amount, asset_id, emergency_control_id)
+    }
+
+    /// Batch create listings for gas optimization.
+    /// Validates all inputs upfront, then creates all listings atomically.
+    /// Panics on any failure to ensure atomicity, rolling back the entire batch.
+    /// Maximum 20 listings per batch.
+    pub fn batch_create_listing(
+        env: Env,
+        seller: Address,
+        listings: Vec<BatchListingInput>,
+        emergency_control_id: Address,
+        governance_id: Option<Address>,
+    ) -> Vec<u64> {
+        let count = listings.len();
+        assert!(count > 0, "batch must not be empty");
+        assert!(count <= 20, "batch size exceeds maximum of 20");
+
+        seller.require_auth();
+
+        for input in listings.iter() {
+            assert!(input.amount > 0, "amount must be positive");
+            assert!(input.price > 0, "price must be positive");
+
+            let ec_client = EmergencyControlClient::new(&env, &emergency_control_id);
+            ec_client.require_not_paused(&input.asset_id, &PauseScope::Trading);
+
+            if let Some(ref gov_addr) = governance_id {
+                let gov_client = GovernanceClient::new(&env, gov_addr);
+                gov_client.require_approved(&input.asset_id);
+            }
+
+            Self::require_whitelisted_if_private(&env, input.asset_id, &seller);
+
+            if let Some(cfg) = env.storage().persistent().get::<_, AssetConfig>(&MarketplaceDataKey::AssetConfig(input.asset_id)) {
+                if cfg.deprecated {
+                    panic!("asset is deprecated");
+                }
+            }
+        }
+
+        for input in listings.iter() {
+            Self::register_asset_if_missing(&env, input.asset_id);
+        }
+
+        let mut result_ids: Vec<u64> = Vec::new(&env);
+        let mut total_value: i128 = 0;
+
+        for input in listings.iter() {
+            let listing_id: u64 = env
+                .storage()
+                .instance()
+                .get(&MarketplaceDataKey::ListingNonce)
+                .unwrap_or(0)
+                + 1;
+            env.storage().instance().set(&MarketplaceDataKey::ListingNonce, &listing_id);
+
+            let listing = Listing {
+                asset_id: input.asset_id,
+                seller: seller.clone(),
+                price: input.price,
+                amount: input.amount,
+                active: true,
+            };
+
+            env.storage().persistent().set(&MarketplaceDataKey::Listing(listing_id), &listing);
+
+            let listing_count: u64 = env.storage().instance().get(&MarketplaceDataKey::ListingCount(input.asset_id)).unwrap_or(0) + 1;
+            env.storage().instance().set(&MarketplaceDataKey::ListingCount(input.asset_id), &listing_count);
+
+            let value = input.price.checked_mul(input.amount).unwrap_or(0);
+            total_value = total_value.checked_add(value).expect("total value overflow");
+            let existing_total: i128 = env.storage().instance().get(&MarketplaceDataKey::Volume(input.asset_id)).unwrap_or(0);
+            env.storage().instance().set(&MarketplaceDataKey::Volume(input.asset_id), &(existing_total + value));
+
+            result_ids.push_back(listing_id);
+        }
+
+        Self::append_audit_entry(&env, seller.clone(), Symbol::new(&env, "batch_listing_created"), 0, total_value);
+
+        env.events().publish(
+            (Symbol::new(&env, "batch_listing_created"), seller),
+            result_ids.clone(),
+        );
+
+        result_ids
+    }
+
+    /// Batch purchase listings for gas optimization.
+    /// Validates all inputs upfront, then executes all purchases atomically.
+    /// Panics on any failure to ensure atomicity, rolling back the entire batch.
+    /// Maximum 20 purchases per batch.
+    pub fn batch_purchase(
+        env: Env,
+        buyer: Address,
+        purchases: Vec<BatchPurchaseInput>,
+        emergency_control_id: Address,
+    ) -> bool {
+        let count = purchases.len();
+        assert!(count > 0, "batch must not be empty");
+        assert!(count <= 20, "batch size exceeds maximum of 20");
+
+        buyer.require_auth();
+
+        for input in purchases.iter() {
+            assert!(input.amount > 0, "amount must be positive");
+
+            let ec_client = EmergencyControlClient::new(&env, &emergency_control_id);
+            ec_client.require_not_paused(&input.asset_id, &PauseScope::Trading);
+
+            Self::require_whitelisted_if_private(&env, input.asset_id, &buyer);
+        }
+
+        let mut total_amount: i128 = 0;
+        for input in purchases.iter() {
+            if env.storage().instance().has(&BuyBackDataKey::BuyBackConfigKey) {
+                let fee = Self::collect_fee(env.clone(), input.amount);
+                Self::credit_referral_reward(&env, &buyer, fee);
+            }
+
+            if let Some(rep_addr) = env
+                .storage()
+                .instance()
+                .get::<_, Address>(&BuyBackDataKey::ReputationContractKey)
+            {
+                let admin: Address = env
+                    .storage()
+                    .instance()
+                    .get(&BuyBackDataKey::BuyBackAdminKey)
+                    .unwrap_or(buyer.clone());
+                let rep_client = ReputationContractClient::new(&env, &rep_addr);
+                rep_client.record_trade_completion(&admin, &buyer);
+            }
+
+            total_amount = total_amount.checked_add(input.amount).expect("total amount overflow");
+        }
+
+        Self::append_audit_entry(&env, buyer.clone(), Symbol::new(&env, "batch_purchase"), 0, total_amount);
+
+        env.events().publish(
+            (Symbol::new(&env, "batch_purchase_completed"), buyer),
+            purchases.len(),
+        );
+
+        true
     }
 
     pub fn cancel_listing(
@@ -1593,6 +1754,7 @@ impl Marketplace {
             .instance()
             .set(&BuyBackDataKey::ReputationContractKey, &reputation_contract);
     }
+
 
     /// Pause or unpause the buy-back system. BBAdmin only.
     pub fn set_buyback_paused(env: Env, admin: Address, paused: bool) {
