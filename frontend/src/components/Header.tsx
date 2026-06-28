@@ -4,13 +4,15 @@ import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { StellarWallet } from '@/lib/stellar'
 import { truncateAddress } from '@/lib/utils'
-import { Wallet, Home, Search, User, FileText, History } from 'lucide-react'
+import { Droplets, Home, Search, Sprout, User, FileText, Wallet } from 'lucide-react'
 
 interface HeaderProps {
   wallet?: StellarWallet
+  onWalletConnected?: (wallet: StellarWallet) => void
+  onWalletDisconnected?: () => void
 }
 
-export function Header({ wallet }: HeaderProps) {
+export function Header({ wallet, onWalletDisconnected }: HeaderProps) {
   return (
     <header className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container mx-auto px-4">
@@ -31,6 +33,14 @@ export function Header({ wallet }: HeaderProps) {
               <Link href="/marketplace" className="flex items-center space-x-1 text-sm font-medium hover:text-primary">
                 <Search className="h-4 w-4" aria-hidden="true" />
                 <span>Marketplace</span>
+              </Link>
+              <Link href="/liquidity" className="flex items-center space-x-1 text-sm font-medium hover:text-primary">
+                <Droplets className="h-4 w-4" />
+                <span>Liquidity</span>
+              </Link>
+              <Link href="/staking" className="flex items-center space-x-1 text-sm font-medium hover:text-primary">
+                <Sprout className="h-4 w-4" />
+                <span>Staking</span>
               </Link>
               {wallet && (
                 <>
@@ -60,7 +70,7 @@ export function Header({ wallet }: HeaderProps) {
                     {truncateAddress(wallet.publicKey)}
                   </span>
                 </div>
-                <Button variant="outline" size="sm">
+                <Button variant="outline" size="sm" onClick={onWalletDisconnected}>
                   Connected
                 </Button>
               </div>
