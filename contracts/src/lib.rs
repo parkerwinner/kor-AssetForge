@@ -23,9 +23,11 @@ pub mod multisig;
 pub mod dividend_distributor;
 pub mod yield_strategy;
 pub mod arbitrator;
-pub mod royalty;
+pub mod whitelist;
+pub mod vesting;
 
 pub use asset_token::AssetToken;
+pub use vesting::Vesting;
 pub use access_control::AccessControl;
 pub use bridge_validator::BridgeValidator;
 pub use dividend_distributor::DividendDistributor;
@@ -44,4 +46,4 @@ pub use reputation::ReputationContract;
 pub use staking_rewards::StakingRewards;
 pub use upgradability::Upgradability;
 pub use insurance::AssetInsurance;
-pub use royalty::Royalty;
+pub use whitelist::Whitelist;
