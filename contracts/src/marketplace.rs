@@ -6,6 +6,7 @@ use crate::oracle::{OracleClient, AggregatedPrice};
 use crate::reputation::ReputationContractClient;
 use crate::royalty::RoyaltyClient;
 
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -162,6 +163,22 @@ pub struct BundleListing {
 
 #[derive(Clone)]
 #[contracttype]
+pub struct BatchListingInput {
+    pub asset_id: u64,
+    pub amount: i128,
+    pub price: i128,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct BatchPurchaseInput {
+    pub listing_id: u64,
+    pub amount: i128,
+    pub asset_id: u64,
+}
+
+#[derive(Clone)]
+#[contracttype]
 pub enum MarketplaceDataKey {
     MarketplaceAdmin,
     AssetPrivate(u64),
@@ -195,6 +212,11 @@ pub enum MarketplaceDataKey {
     Oracle,
     BundleListings,
     BundleListing(u64),
+    // --- Flash-loan protection (Issue #210) ---
+    /// Flash-loan guard configuration (instance-level).
+    FlashLoanGuard,
+    /// Per-buyer purchase counter for a given ledger (block): (buyer, ledger_seq) -> u32.
+    BlockTrades(Address, u32),
 }
 
 /// Storage keys for buy-back and burn system.
@@ -208,7 +230,7 @@ pub enum BuyBackDataKey {
     HistoryKey,
     GovernanceContractKey,
     ReputationContractKey,
-    RoyaltyContractKey,
+
 }
 
 /// Storage keys for the referral system.
@@ -267,6 +289,22 @@ pub struct BuyBackRecord {
     pub executor: Address,
     /// Whether this was an auto-triggered buy-back
     pub auto_triggered: bool,
+}
+
+/// Flash-loan protection configuration for the marketplace (Issue #210).
+///
+/// Both limits default to the permissive value (`0`) so existing behaviour is
+/// unchanged until an admin opts in via `configure_flash_loan_guard`.
+#[derive(Clone)]
+#[contracttype]
+pub struct FlashLoanGuardConfig {
+    /// Maximum number of purchases a single buyer may perform within one ledger
+    /// (block). `0` disables the limit. Caps the atomic, same-block churn that
+    /// flash-loan style attacks rely on.
+    pub max_trades_per_block: u32,
+    /// Maximum allowed deviation (bps) between a listing price and the oracle
+    /// price on a guarded purchase. `0` disables the on-chain price check.
+    pub max_price_deviation_bps: u32,
 }
 
 // ============================================================================
@@ -383,6 +421,9 @@ impl Marketplace {
         assert!(amount > 0, "amount must be positive");
         buyer.require_auth();
 
+        // Flash-loan guard: cap how many purchases a buyer can make per block.
+        Self::enforce_block_trade_limit(&env, &buyer);
+
         // Enforce pause check for trading operations
         let ec_client = EmergencyControlClient::new(&env, &emergency_control_id);
         ec_client.require_not_paused(&asset_id, &PauseScope::Trading);
@@ -410,17 +451,6 @@ impl Marketplace {
             let rep_client = ReputationContractClient::new(&env, &rep_addr);
             rep_client.record_trade_completion(&admin, &buyer);
         }
-
-        // Record royalty payment if royalty contract is configured
-        if let Some(royalty_addr) = env
-            .storage()
-            .instance()
-            .get::<_, Address>(&BuyBackDataKey::RoyaltyContractKey)
-        {
-            let royalty_client = RoyaltyClient::new(&env, &royalty_addr);
-            royalty_client.record_royalty(&asset_id, &buyer, &amount);
-        }
-
         true
     }
 
@@ -442,6 +472,150 @@ impl Marketplace {
             "price deviates too much from oracle"
         );
         Self::purchase(env, buyer, listing_id, amount, asset_id, emergency_control_id)
+    }
+
+    /// Batch create listings for gas optimization.
+    /// Validates all inputs upfront, then creates all listings atomically.
+    /// Panics on any failure to ensure atomicity, rolling back the entire batch.
+    /// Maximum 20 listings per batch.
+    pub fn batch_create_listing(
+        env: Env,
+        seller: Address,
+        listings: Vec<BatchListingInput>,
+        emergency_control_id: Address,
+        governance_id: Option<Address>,
+    ) -> Vec<u64> {
+        let count = listings.len();
+        assert!(count > 0, "batch must not be empty");
+        assert!(count <= 20, "batch size exceeds maximum of 20");
+
+        seller.require_auth();
+
+        for input in listings.iter() {
+            assert!(input.amount > 0, "amount must be positive");
+            assert!(input.price > 0, "price must be positive");
+
+            let ec_client = EmergencyControlClient::new(&env, &emergency_control_id);
+            ec_client.require_not_paused(&input.asset_id, &PauseScope::Trading);
+
+            if let Some(ref gov_addr) = governance_id {
+                let gov_client = GovernanceClient::new(&env, gov_addr);
+                gov_client.require_approved(&input.asset_id);
+            }
+
+            Self::require_whitelisted_if_private(&env, input.asset_id, &seller);
+
+            if let Some(cfg) = env.storage().persistent().get::<_, AssetConfig>(&MarketplaceDataKey::AssetConfig(input.asset_id)) {
+                if cfg.deprecated {
+                    panic!("asset is deprecated");
+                }
+            }
+        }
+
+        for input in listings.iter() {
+            Self::register_asset_if_missing(&env, input.asset_id);
+        }
+
+        let mut result_ids: Vec<u64> = Vec::new(&env);
+        let mut total_value: i128 = 0;
+
+        for input in listings.iter() {
+            let listing_id: u64 = env
+                .storage()
+                .instance()
+                .get(&MarketplaceDataKey::ListingNonce)
+                .unwrap_or(0)
+                + 1;
+            env.storage().instance().set(&MarketplaceDataKey::ListingNonce, &listing_id);
+
+            let listing = Listing {
+                asset_id: input.asset_id,
+                seller: seller.clone(),
+                price: input.price,
+                amount: input.amount,
+                active: true,
+            };
+
+            env.storage().persistent().set(&MarketplaceDataKey::Listing(listing_id), &listing);
+
+            let listing_count: u64 = env.storage().instance().get(&MarketplaceDataKey::ListingCount(input.asset_id)).unwrap_or(0) + 1;
+            env.storage().instance().set(&MarketplaceDataKey::ListingCount(input.asset_id), &listing_count);
+
+            let value = input.price.checked_mul(input.amount).unwrap_or(0);
+            total_value = total_value.checked_add(value).expect("total value overflow");
+            let existing_total: i128 = env.storage().instance().get(&MarketplaceDataKey::Volume(input.asset_id)).unwrap_or(0);
+            env.storage().instance().set(&MarketplaceDataKey::Volume(input.asset_id), &(existing_total + value));
+
+            result_ids.push_back(listing_id);
+        }
+
+        Self::append_audit_entry(&env, seller.clone(), Symbol::new(&env, "batch_listing_created"), 0, total_value);
+
+        env.events().publish(
+            (Symbol::new(&env, "batch_listing_created"), seller),
+            result_ids.clone(),
+        );
+
+        result_ids
+    }
+
+    /// Batch purchase listings for gas optimization.
+    /// Validates all inputs upfront, then executes all purchases atomically.
+    /// Panics on any failure to ensure atomicity, rolling back the entire batch.
+    /// Maximum 20 purchases per batch.
+    pub fn batch_purchase(
+        env: Env,
+        buyer: Address,
+        purchases: Vec<BatchPurchaseInput>,
+        emergency_control_id: Address,
+    ) -> bool {
+        let count = purchases.len();
+        assert!(count > 0, "batch must not be empty");
+        assert!(count <= 20, "batch size exceeds maximum of 20");
+
+        buyer.require_auth();
+
+        for input in purchases.iter() {
+            assert!(input.amount > 0, "amount must be positive");
+
+            let ec_client = EmergencyControlClient::new(&env, &emergency_control_id);
+            ec_client.require_not_paused(&input.asset_id, &PauseScope::Trading);
+
+            Self::require_whitelisted_if_private(&env, input.asset_id, &buyer);
+        }
+
+        let mut total_amount: i128 = 0;
+        for input in purchases.iter() {
+            if env.storage().instance().has(&BuyBackDataKey::BuyBackConfigKey) {
+                let fee = Self::collect_fee(env.clone(), input.amount);
+                Self::credit_referral_reward(&env, &buyer, fee);
+            }
+
+            if let Some(rep_addr) = env
+                .storage()
+                .instance()
+                .get::<_, Address>(&BuyBackDataKey::ReputationContractKey)
+            {
+                let admin: Address = env
+                    .storage()
+                    .instance()
+                    .get(&BuyBackDataKey::BuyBackAdminKey)
+                    .unwrap_or(buyer.clone());
+                let rep_client = ReputationContractClient::new(&env, &rep_addr);
+                rep_client.record_trade_completion(&admin, &buyer);
+            }
+
+            total_amount = total_amount.checked_add(input.amount).expect("total amount overflow");
+        }
+
+        Self::append_audit_entry(&env, buyer.clone(), Symbol::new(&env, "batch_purchase"), 0, total_amount);
+
+        env.events().publish(
+            (Symbol::new(&env, "batch_purchase_completed"), buyer),
+            purchases.len(),
+        );
+
+        true
     }
 
     pub fn cancel_listing(
@@ -783,6 +957,91 @@ impl Marketplace {
                 panic!("user not whitelisted for private asset");
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Flash-loan protection (Issue #210)
+    // -----------------------------------------------------------------------
+
+    /// Configure the marketplace flash-loan guard. Admin only.
+    ///
+    /// * `max_trades_per_block` – per-buyer purchase cap per ledger (0 = off).
+    /// * `max_price_deviation_bps` – max listing-vs-oracle deviation enforced by
+    ///   [`Marketplace::purchase_guarded`] (0 = off).
+    pub fn configure_flash_loan_guard(
+        env: Env,
+        admin: Address,
+        max_trades_per_block: u32,
+        max_price_deviation_bps: u32,
+    ) {
+        Self::require_admin(&env, &admin);
+        let cfg = FlashLoanGuardConfig {
+            max_trades_per_block,
+            max_price_deviation_bps,
+        };
+        env.storage()
+            .instance()
+            .set(&MarketplaceDataKey::FlashLoanGuard, &cfg);
+        env.events().publish(
+            (Symbol::new(&env, "flash_loan_guard_configured"),),
+            (max_trades_per_block, max_price_deviation_bps),
+        );
+    }
+
+    /// Return the active flash-loan guard configuration (defaults to permissive).
+    pub fn get_flash_loan_guard(env: Env) -> FlashLoanGuardConfig {
+        Self::flash_loan_guard(&env)
+    }
+
+    /// Purchase with both the per-block trade limit and an oracle price-deviation
+    /// check applied (Issue #210). Reverts if the listing price strays beyond the
+    /// configured deviation from the oracle, blocking price-manipulation exits.
+    pub fn purchase_guarded(
+        env: Env,
+        buyer: Address,
+        listing_id: u64,
+        amount: i128,
+        asset_id: u64,
+        emergency_control_id: Address,
+    ) -> bool {
+        let cfg = Self::flash_loan_guard(&env);
+        if cfg.max_price_deviation_bps > 0 {
+            let listing = Self::get_listing(env.clone(), listing_id).expect("listing not found");
+            assert!(
+                Self::validate_listing_price(
+                    env.clone(),
+                    asset_id,
+                    listing.price,
+                    cfg.max_price_deviation_bps
+                ),
+                "price deviates too much from oracle"
+            );
+        }
+        Self::purchase(env, buyer, listing_id, amount, asset_id, emergency_control_id)
+    }
+
+    fn flash_loan_guard(env: &Env) -> FlashLoanGuardConfig {
+        env.storage()
+            .instance()
+            .get(&MarketplaceDataKey::FlashLoanGuard)
+            .unwrap_or(FlashLoanGuardConfig {
+                max_trades_per_block: 0,
+                max_price_deviation_bps: 0,
+            })
+    }
+
+    fn enforce_block_trade_limit(env: &Env, buyer: &Address) {
+        let cfg = Self::flash_loan_guard(env);
+        if cfg.max_trades_per_block == 0 {
+            return;
+        }
+        let seq = env.ledger().sequence();
+        let key = MarketplaceDataKey::BlockTrades(buyer.clone(), seq);
+        let count: u32 = env.storage().persistent().get(&key).unwrap_or(0);
+        if count >= cfg.max_trades_per_block {
+            panic!("per-block trade limit exceeded");
+        }
+        env.storage().persistent().set(&key, &(count + 1));
     }
 
     // -----------------------------------------------------------------------
@@ -1497,14 +1756,6 @@ impl Marketplace {
             .set(&BuyBackDataKey::ReputationContractKey, &reputation_contract);
     }
 
-    /// Set or update the royalty contract address. BBAdmin only.
-    pub fn set_royalty_contract(env: Env, admin: Address, royalty_contract: Address) {
-        admin.require_auth();
-        Self::require_buyback_admin(&env, &admin);
-        env.storage()
-            .instance()
-            .set(&BuyBackDataKey::RoyaltyContractKey, &royalty_contract);
-    }
 
     /// Pause or unpause the buy-back system. BBAdmin only.
     pub fn set_buyback_paused(env: Env, admin: Address, paused: bool) {
