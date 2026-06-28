@@ -18,20 +18,20 @@ export function Header({ wallet, onWalletDisconnected }: HeaderProps) {
       <div className="container mx-auto px-4">
         <div className="flex h-16 items-center justify-between">
           <div className="flex items-center space-x-6">
-            <Link href="/" className="flex items-center space-x-2">
-              <div className="h-8 w-8 rounded bg-primary flex items-center justify-center">
+            <Link href="/" className="flex items-center space-x-2" aria-label="kor-AssetForge home">
+              <div className="h-8 w-8 rounded bg-primary flex items-center justify-center" aria-hidden="true">
                 <span className="text-primary-foreground font-bold text-sm">K</span>
               </div>
               <span className="font-bold text-xl">kor-AssetForge</span>
             </Link>
-            
-            <nav className="hidden md:flex items-center space-x-6">
+
+            <nav className="hidden md:flex items-center space-x-6" aria-label="Main navigation">
               <Link href="/" className="flex items-center space-x-1 text-sm font-medium hover:text-primary">
-                <Home className="h-4 w-4" />
+                <Home className="h-4 w-4" aria-hidden="true" />
                 <span>Home</span>
               </Link>
               <Link href="/marketplace" className="flex items-center space-x-1 text-sm font-medium hover:text-primary">
-                <Search className="h-4 w-4" />
+                <Search className="h-4 w-4" aria-hidden="true" />
                 <span>Marketplace</span>
               </Link>
               <Link href="/liquidity" className="flex items-center space-x-1 text-sm font-medium hover:text-primary">
@@ -45,11 +45,15 @@ export function Header({ wallet, onWalletDisconnected }: HeaderProps) {
               {wallet && (
                 <>
                   <Link href="/dashboard" className="flex items-center space-x-1 text-sm font-medium hover:text-primary">
-                    <User className="h-4 w-4" />
+                    <User className="h-4 w-4" aria-hidden="true" />
                     <span>Dashboard</span>
                   </Link>
+                  <Link href="/transactions" className="flex items-center space-x-1 text-sm font-medium hover:text-primary">
+                    <History className="h-4 w-4" aria-hidden="true" />
+                    <span>Transactions</span>
+                  </Link>
                   <Link href="/kyc" className="flex items-center space-x-1 text-sm font-medium hover:text-primary">
-                    <FileText className="h-4 w-4" />
+                    <FileText className="h-4 w-4" aria-hidden="true" />
                     <span>KYC</span>
                   </Link>
                 </>
