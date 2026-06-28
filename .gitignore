@@ -54,3 +54,4 @@ logs/
 Thumbs.db
 issue.md
 pr.md
+contracts/test_snapshots/

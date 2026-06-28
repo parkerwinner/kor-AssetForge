@@ -4,6 +4,7 @@ use crate::emergency_control::{EmergencyControlClient, PauseScope};
 use crate::governance::GovernanceClient;
 use crate::oracle::{OracleClient, AggregatedPrice};
 use crate::reputation::ReputationContractClient;
+use crate::whitelist::WhitelistClient;
 
 
 #[contracterror]
@@ -347,6 +348,8 @@ impl Marketplace {
 
         // Enforce whitelisting if asset is private
         Self::require_whitelisted_if_private(&env, asset_id, &seller);
+        // Enforce accredited investor check if whitelist contract is configured
+        Self::require_accredited_investor(&env, &seller);
 
         // Block new listings for deprecated assets.
         if let Some(cfg) = env.storage().persistent().get::<_, AssetConfig>(&MarketplaceDataKey::AssetConfig(asset_id)) {
@@ -429,6 +432,8 @@ impl Marketplace {
 
         // Enforce whitelisting if asset is private
         Self::require_whitelisted_if_private(&env, asset_id, &buyer);
+        // Enforce accredited investor check if whitelist contract is configured
+        Self::require_accredited_investor(&env, &buyer);
 
         // Collect fee and credit referral reward
         if env.storage().instance().has(&BuyBackDataKey::BuyBackConfigKey) {
