@@ -2,9 +2,11 @@
 
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
-import { StellarWallet } from '@/lib/stellar'
+import { stellarService, StellarWallet } from '@/lib/stellar'
 import { truncateAddress } from '@/lib/utils'
-import { Droplets, Home, Search, Sprout, User, FileText, Wallet } from 'lucide-react'
+import { OnboardingTrigger } from '@/components/onboarding/OnboardingTrigger'
+import { useState } from 'react'
+import { Droplets, Home, Search, Sprout, User, FileText, Wallet, History } from 'lucide-react'
 
 interface HeaderProps {
   wallet?: StellarWallet
@@ -12,7 +14,30 @@ interface HeaderProps {
   onWalletDisconnected?: () => void
 }
 
-export function Header({ wallet, onWalletDisconnected }: HeaderProps) {
+export function Header({ wallet, onWalletConnected, onWalletDisconnected }: HeaderProps) {
+  const [isConnecting, setIsConnecting] = useState(false)
+
+  const handleConnect = async () => {
+    setIsConnecting(true)
+    try {
+      const w = await stellarService.connectWallet()
+      onWalletConnected?.(w)
+    } catch {
+      // ignore
+    } finally {
+      setIsConnecting(false)
+    }
+  }
+
+  const handleDisconnect = async () => {
+    try {
+      await stellarService.disconnectWallet()
+      onWalletDisconnected?.()
+    } catch {
+      // ignore
+    }
+  }
+
   return (
     <header className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container mx-auto px-4">
@@ -61,7 +86,8 @@ export function Header({ wallet, onWalletDisconnected }: HeaderProps) {
             </nav>
           </div>
 
-          <div className="flex items-center space-x-4">
+          <div className="flex items-center space-x-2">
+            <OnboardingTrigger />
             {wallet ? (
               <div className="flex items-center space-x-2">
                 <div className="hidden md:flex items-center space-x-2 px-3 py-1 bg-muted rounded-lg">
@@ -70,13 +96,13 @@ export function Header({ wallet, onWalletDisconnected }: HeaderProps) {
                     {truncateAddress(wallet.publicKey)}
                   </span>
                 </div>
-                <Button variant="outline" size="sm" onClick={onWalletDisconnected}>
-                  Connected
+                <Button variant="outline" size="sm" onClick={handleDisconnect}>
+                  Disconnect
                 </Button>
               </div>
             ) : (
-              <Button size="sm">
-                Connect Wallet
+              <Button size="sm" onClick={handleConnect} disabled={isConnecting}>
+                {isConnecting ? 'Connecting...' : 'Connect Wallet'}
               </Button>
             )}
           </div>
