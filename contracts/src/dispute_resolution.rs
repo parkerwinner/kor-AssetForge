@@ -375,7 +375,7 @@ impl DisputeResolution {
             DisputeOutcome::BuyerFavor => summary.buyer_favor += 1,
             DisputeOutcome::SellerFavor => summary.seller_favor += 1,
             DisputeOutcome::Split => summary.split += 1,
-            DisputeOutcome::None => {},
+            DisputeOutcome::None => panic!("invalid vote outcome"),
         }
 
         env.storage()
@@ -433,7 +433,7 @@ impl DisputeResolution {
             DisputeOutcome::BuyerFavor => dispute.filed_by.clone(),
             DisputeOutcome::SellerFavor => dispute.respondent.clone(),
             DisputeOutcome::Split => dispute.filed_by.clone(),
-            DisputeOutcome::None => unreachable!(),
+            DisputeOutcome::None => panic!("resolution must be specified"),
         };
 
         dispute.status = DisputeStatus::Resolved;
