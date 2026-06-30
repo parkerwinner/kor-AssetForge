@@ -20,25 +20,33 @@ export const metadata: Metadata = {
   description: "Decentralized marketplace for tokenizing and trading real-world assets on Stellar",
 };
 
-export default function RootLayout({
+import { NextIntlClientProvider } from 'next-intl';
+import { getLocale, getMessages } from 'next-intl/server';
+
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const locale = await getLocale();
+  const messages = await getMessages();
+
   return (
     <html
-      lang="en"
+      lang={locale}
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
         <a href="#main-content" className="skip-link">
           Skip to main content
         </a>
-        <ErrorBoundary>
-          <OnboardingProvider>
-            {children}
-          </OnboardingProvider>
-        </ErrorBoundary>
+        <NextIntlClientProvider messages={messages} locale={locale}>
+          <ErrorBoundary>
+            <OnboardingProvider>
+              {children}
+            </OnboardingProvider>
+          </ErrorBoundary>
+        </NextIntlClientProvider>
         <Toaster />
       </body>
     </html>
