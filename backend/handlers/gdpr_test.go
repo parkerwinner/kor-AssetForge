@@ -50,6 +50,10 @@ func (m *mockEmailService) SendScheduledReportEmail(recipients []string, reportN
 	return nil
 }
 
+func (m *mockEmailService) SendCustomEmail(toEmail, toName, subject, html, plainText string) error {
+	return nil
+}
+
 func TestGDPRHandler_DataExport(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -19,7 +19,7 @@ func TestValidateTokenizeAssetRequest(t *testing.T) {
     }
 
     req := TokenizeAssetRequest{
-        IssuerAccount: "GABXYMNLGGTWAV7EQYHVWLQJ7MSAKBW3OX4J5B3UALQTVOUGX3HXBMEM",
+        IssuerAccount: "GCNIPSNVY5VAEAP3YNQWF7ZARHP5FZRE33XJO5CV7RET7XCZX3JGVUPE",
         Name:          "Real Asset",
         Symbol:        "RWA1",
         AssetType:     "real_estate",
@@ -37,7 +37,7 @@ func TestValidateTokenizeAssetRequestRejectsHtml(t *testing.T) {
     }
 
     req := TokenizeAssetRequest{
-        IssuerAccount: "GABXYMNLGGTWAV7EQYHVWLQJ7MSAKBW3OX4J5B3UALQTVOUGX3HXBMEM",
+        IssuerAccount: "GCNIPSNVY5VAEAP3YNQWF7ZARHP5FZRE33XJO5CV7RET7XCZX3JGVUPE",
         Name:          "Real <b>Asset</b>",
         Symbol:        "RWA1",
         AssetType:     "real_estate",
