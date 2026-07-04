@@ -3,15 +3,18 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"github.com/yourusername/kor-assetforge/apperrors"
+	"github.com/yourusername/kor-assetforge/middleware"
 	"github.com/yourusername/kor-assetforge/models"
 	"github.com/yourusername/kor-assetforge/services"
 	"github.com/yourusername/kor-assetforge/utils"
@@ -24,15 +27,20 @@ type AssetHandler struct {
 	stellarClient *utils.StellarClient
 	redisClient   *redis.Client
 	emailService  services.EmailService
+	workflow      *services.WorkflowService
 }
 
-func NewAssetHandler(db *gorm.DB, stellarClient *utils.StellarClient, redisClient *redis.Client, emailService services.EmailService) *AssetHandler {
-	return &AssetHandler{
+func NewAssetHandler(db *gorm.DB, stellarClient *utils.StellarClient, redisClient *redis.Client, emailService services.EmailService, workflow ...*services.WorkflowService) *AssetHandler {
+	handler := &AssetHandler{
 		db:            db,
 		stellarClient: stellarClient,
 		redisClient:   redisClient,
 		emailService:  emailService,
 	}
+	if len(workflow) > 0 {
+		handler.workflow = workflow[0]
+	}
+	return handler
 }
 
 // TokenizeAsset handles formal asset tokenization with Soroban integration
@@ -62,6 +70,31 @@ func (h *AssetHandler) TokenizeAsset(c *gin.Context) {
 		return
 	}
 
+	fractionHandler := NewFractionHandler(h.db)
+	assetConfig, _ := fractionHandler.GetApplicableConfig(req.AssetType)
+	if assetConfig != nil {
+		if req.Fractions > 0 {
+			fractionSize := float64(req.TotalSupply) / float64(req.Fractions)
+			if fractionSize < assetConfig.MinFractionSize {
+				apperrors.AbortWithError(c, apperrors.NewBadRequestError(
+					"Fraction size too small: minimum is "+fmt.Sprintf("%f", assetConfig.MinFractionSize)))
+				return
+			}
+			if fractionSize > assetConfig.MaxFractionSize {
+				apperrors.AbortWithError(c, apperrors.NewBadRequestError(
+					"Fraction size too large: maximum is "+fmt.Sprintf("%f", assetConfig.MaxFractionSize)))
+				return
+			}
+		}
+		if assetConfig.RequireAccreditation {
+			var user models.User
+			if err := h.db.First(&user, c.GetUint("user_id")).Error; err != nil || !user.AccreditedInvestor {
+				apperrors.AbortWithError(c, apperrors.NewForbiddenError("Accredited investor status required for this asset type"))
+				return
+			}
+		}
+	}
+
 	metadataJSON, _ := json.Marshal(req.Metadata)
 
 	asset := models.Asset{
@@ -80,6 +113,8 @@ func (h *AssetHandler) TokenizeAsset(c *gin.Context) {
 		apperrors.AbortWithError(c, apperrors.Wrap(err, apperrors.CodeDatabaseError, "Failed to create asset record", http.StatusInternalServerError))
 		return
 	}
+	c.Set("audit_asset_id", asset.ID)
+	middleware.SetAssetAuditState(c, nil, asset)
 
 	if h.redisClient != nil {
 		ctx := context.Background()
@@ -101,6 +136,8 @@ func (h *AssetHandler) TokenizeAsset(c *gin.Context) {
 	}
 
 	h.db.Model(&asset).Update("verified", true)
+	asset.Verified = true
+	middleware.SetAssetAuditState(c, nil, asset)
 
 	c.JSON(http.StatusCreated, gin.H{
 		"message": "Asset tokenized successfully",
@@ -153,7 +190,7 @@ func (h *AssetHandler) ListAssets(c *gin.Context) {
 
 	var assets []models.Asset
 	var total int64
-	paginationRes, err := utils.Paginate(h.db, c, page, limit, &total, &assets)
+	paginationRes, err := utils.Paginate(h.db.Model(&models.Asset{}), c, page, limit, &total, &assets)
 	if err != nil {
 		apperrors.AbortWithError(c, apperrors.Wrap(err, apperrors.CodeDatabaseError, "Failed to fetch assets", http.StatusInternalServerError))
 		return
@@ -254,6 +291,8 @@ func (h *AssetHandler) GetAsset(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Asset not found"})
 		return
 	}
+	c.Set("audit_asset_id", asset.ID)
+	middleware.SetAssetAuditState(c, nil, asset)
 
 	// Save to Redis
 	if h.redisClient != nil {
@@ -299,7 +338,6 @@ func (h *AssetHandler) ListAssetForSale(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Asset not found"})
 		return
 	}
-
 	listingID := "listing_1"
 	listing := models.Listing{
 		AssetID:      req.AssetID,
@@ -357,6 +395,22 @@ func (h *AssetHandler) TransferAsset(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Asset not found"})
 		return
 	}
+	c.Set("audit_asset_id", asset.ID)
+	if h.workflow != nil {
+		if requester, ok := c.Get("user_id"); ok {
+			if userID, ok := requester.(uint); ok {
+				approval, err := h.workflow.CreateTransferRequest(c.Request.Context(), userID, services.TransferApprovalInput{AssetID: req.AssetID, FromAddress: req.FromAddress, ToAddress: req.ToAddress, Amount: req.Amount})
+				if err == nil {
+					c.JSON(http.StatusAccepted, gin.H{"message": "transfer awaiting approval", "approval_request": approval})
+					return
+				}
+				if !errors.Is(err, services.ErrNoMatchingWorkflow) {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create approval request"})
+					return
+				}
+			}
+		}
+	}
 
 	txHash := "tx_hash_placeholder"
 	transaction := models.Transaction{
@@ -403,6 +457,7 @@ func (h *AssetHandler) UpdateMetadata(c *gin.Context) {
 		apperrors.AbortWithError(c, apperrors.NewNotFoundError("Asset not found"))
 		return
 	}
+	before := asset
 
 	if asset.IsImmutable {
 		apperrors.AbortWithError(c, apperrors.NewForbiddenError("Metadata is immutable after minting"))
@@ -415,6 +470,8 @@ func (h *AssetHandler) UpdateMetadata(c *gin.Context) {
 		apperrors.AbortWithError(c, apperrors.NewInternalError("Failed to update metadata"))
 		return
 	}
+	c.Set("audit_asset_id", asset.ID)
+	middleware.SetAssetAuditState(c, before, asset)
 
 	c.JSON(http.StatusOK, gin.H{
 		"message":       "Metadata updated successfully",
@@ -483,6 +540,7 @@ func (h *AssetHandler) MakeMetadataImmutable(c *gin.Context) {
 		apperrors.AbortWithError(c, apperrors.NewNotFoundError("Asset not found"))
 		return
 	}
+	before := asset
 
 	if asset.MetadataURI == "" {
 		apperrors.AbortWithError(c, apperrors.NewBadRequestError("Set metadata URI before making immutable"))
@@ -494,6 +552,8 @@ func (h *AssetHandler) MakeMetadataImmutable(c *gin.Context) {
 		apperrors.AbortWithError(c, apperrors.NewInternalError("Failed to make metadata immutable"))
 		return
 	}
+	c.Set("audit_asset_id", asset.ID)
+	middleware.SetAssetAuditState(c, before, asset)
 
 	c.JSON(http.StatusOK, gin.H{
 		"message":      "Metadata is now immutable",
@@ -776,4 +836,147 @@ func (h *AssetHandler) notifyTransactionParticipants(transaction *models.Transac
 		}
 	}
 	return nil
+}
+
+// BulkTokenizeAssets handles CSV/JSON bulk asset upload and tokenization.
+// POST /api/v1/assets/bulk-upload
+func (h *AssetHandler) BulkTokenizeAssets(c *gin.Context) {
+	userID, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	fh, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file is required (multipart field: file)"})
+		return
+	}
+
+	format, valErr := validator.ValidateBulkUploadFile(fh)
+	if valErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": valErr.Error()})
+		return
+	}
+
+	f, err := fh.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not open uploaded file"})
+		return
+	}
+	defer f.Close()
+
+	svc := services.NewBulkImportService(h.db)
+
+	var rows []models.BulkAssetRow
+	var rowErrs []models.BulkAssetRowError
+	if format == "csv" {
+		rows, rowErrs = svc.ParseCSV(f)
+	} else {
+		rows, rowErrs = svc.ParseJSON(f)
+	}
+
+	if len(rowErrs) > 0 && len(rows) == 0 {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{
+			"error":  "validation failed — no rows could be processed",
+			"errors": rowErrs,
+		})
+		return
+	}
+
+	uid, _ := userID.(uint)
+	job := &models.ImportJob{
+		UserID:   uid,
+		Filename: fh.Filename,
+		Format:   format,
+		Status:   "pending",
+	}
+	if err := h.db.Create(job).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not create import job"})
+		return
+	}
+
+	go svc.ProcessRows(job, rows)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"success":        true,
+		"message":        "import job queued",
+		"job_id":         job.ID,
+		"total_rows":     len(rows),
+		"skipped_rows":   len(rowErrs),
+		"skipped_errors": rowErrs,
+	})
+}
+
+// GetImportJob returns the status of a bulk import job.
+// GET /api/v1/assets/bulk-upload/:job_id
+func (h *AssetHandler) GetImportJob(c *gin.Context) {
+	jobID, err := strconv.ParseUint(c.Param("job_id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid job_id"})
+		return
+	}
+
+	var job models.ImportJob
+	if err := h.db.First(&job, jobID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "import job not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": job})
+}
+
+// GetExchangeRates returns current exchange rates for supported currencies.
+// GET /api/v1/currencies/rates
+func (h *AssetHandler) GetExchangeRates(c *gin.Context) {
+	svc := services.NewCurrencyService(h.redisClient, "https://open.er-api.com/v6/latest")
+	rates, err := svc.GetRates(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "currency service unavailable"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": rates})
+}
+
+// ConvertCurrency converts an amount between two currencies.
+// GET /api/v1/currencies/convert?amount=100&from=USD&to=EUR
+func (h *AssetHandler) ConvertCurrency(c *gin.Context) {
+	amountStr := c.Query("amount")
+	from := strings.ToUpper(c.Query("from"))
+	to := strings.ToUpper(c.Query("to"))
+
+	if amountStr == "" || from == "" || to == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "amount, from, and to are required"})
+		return
+	}
+
+	amount, err := strconv.ParseFloat(amountStr, 64)
+	if err != nil || amount <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "amount must be a positive number"})
+		return
+	}
+
+	if !services.IsSupportedCurrency(from) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported 'from' currency", "supported": services.SupportedCurrencies})
+		return
+	}
+	if !services.IsSupportedCurrency(to) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported 'to' currency", "supported": services.SupportedCurrencies})
+		return
+	}
+
+	svc := services.NewCurrencyService(h.redisClient, "https://open.er-api.com/v6/latest")
+	converted, err := svc.Convert(c.Request.Context(), amount, from, to)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":   true,
+		"from":      from,
+		"to":        to,
+		"amount":    amount,
+		"converted": converted,
+	})
 }
