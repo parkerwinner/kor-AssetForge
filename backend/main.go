@@ -242,6 +242,19 @@ func main() {
 					feeDistributionAdmin.GET("/runs", feeDistributionHandler.ListRuns)
 					feeDistributionAdmin.GET("/runs/:id", feeDistributionHandler.GetRun)
 				}
+
+				// Dynamic fee configuration admin endpoints (#177)
+				feeService := services.NewFeeService(db)
+				feeAdminHandler := handlers.NewFeeAdminHandler(db, feeService)
+				feeAdminGroup := adminGroup.Group("/fees")
+				{
+					feeAdminGroup.POST("", feeAdminHandler.CreateFeeConfig)
+					feeAdminGroup.GET("", feeAdminHandler.ListFeeConfigs)
+					feeAdminGroup.GET("/:id", feeAdminHandler.GetFeeConfig)
+					feeAdminGroup.PUT("/:id", feeAdminHandler.UpdateFeeConfig)
+					feeAdminGroup.DELETE("/:id", feeAdminHandler.DeactivateFeeConfig)
+					feeAdminGroup.GET("/:id/audit", feeAdminHandler.GetFeeAuditLog)
+				}
 			}
 		}
 
@@ -378,6 +391,8 @@ func main() {
 		v1.POST("/liquidity/pools", liquidityHandler.CreatePool)
 		v1.GET("/liquidity/pools", liquidityHandler.ListPools)
 		v1.GET("/liquidity/pools/:id", liquidityHandler.GetPool)
+		v1.GET("/liquidity/pools/:id/analytics", liquidityHandler.GetPoolAnalytics)
+		v1.GET("/liquidity/pools/compare", liquidityHandler.ComparePools)
 		v1.POST("/liquidity/add", liquidityHandler.AddLiquidity)
 		v1.POST("/liquidity/remove", liquidityHandler.RemoveLiquidity)
 		v1.POST("/liquidity/swap", liquidityHandler.Swap)
@@ -429,14 +444,25 @@ func main() {
 			legalGroup.GET("/:type", legalHandler.GetActiveDocument)
 			legalGroup.GET("/:type/versions", legalHandler.ListDocumentVersions)
 		}
+
+		// GDPR data export routes (#178)
+		gdprExportService := services.NewDataExportService(db, emailService)
+		gdprHandler := handlers.NewGDPRHandler(db, gdprExportService)
+		legalGroup.GET("/gdpr/export/download/:token", gdprHandler.DownloadExport)
+
 		legalProtected := protected.Group("/legal")
 		{
 			legalProtected.POST("/consent", legalHandler.RecordConsent)
 			legalProtected.GET("/consent/history", legalHandler.GetConsentHistory)
 			legalProtected.GET("/consent/pending", legalHandler.CheckPendingConsents)
-			legalProtected.POST("/gdpr/export", legalHandler.RequestDataExport)
-			legalProtected.GET("/gdpr/export/:id", legalHandler.GetDataExportStatus)
+			legalProtected.POST("/gdpr/export", gdprHandler.RequestDataExport)
+			legalProtected.GET("/gdpr/export/:id", gdprHandler.GetDataExportStatus)
 		}
+
+		// Public fee endpoints - preview and active config (#177)
+		feePublicHandler := handlers.NewFeeAdminHandler(db, services.NewFeeService(db))
+		v1.GET("/fees/preview", feePublicHandler.PreviewFee)
+		v1.GET("/fees/active", feePublicHandler.GetActiveFee)
 
 		// Asset taxonomy routes (#159)
 		taxonomyHandler := handlers.NewTaxonomyHandler(db)
@@ -614,6 +640,12 @@ func main() {
 	// Pre-launch the hub so it's ready before the first connection.
 	_ = handlers.GetHub()
 
+	// Initialize and start event indexer (#180)
+	eventIndexer := services.NewEventIndexer(db)
+	eventIndexer.Start()
+
+	r := router
+
 	// Start server
 	port := os.Getenv("SERVER_PORT")
 	if port == "" {
@@ -621,7 +653,7 @@ func main() {
 	}
 
 	log.Printf("Starting server on port %s", port)
-	if err := router.Run(":" + port); err != nil {
+	if err := r.Run(":" + port); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
 }

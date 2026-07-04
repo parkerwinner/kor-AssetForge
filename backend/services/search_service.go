@@ -8,9 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yourusername/kor-assetforge/models"
-
 	"github.com/elastic/go-elasticsearch/v8"
+	"github.com/yourusername/kor-assetforge/models"
 	"gorm.io/gorm"
 )
 

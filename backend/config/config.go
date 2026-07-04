@@ -117,6 +117,15 @@ func InitDB() (*gorm.DB, error) {
 		&models.ComplianceAuditLog{},
 		// Batch transaction model (#106)
 		&models.BatchTransaction{},
+		// Event indexer models (#180)
+		&models.IndexedEvent{},
+		&models.EventCheckpoint{},
+		// GDPR export models (#178)
+		&models.ExportJob{},
+		// Dynamic fee config models (#177)
+		&models.FeeConfig{},
+		&models.FeeAuditLog{},
+		// Approval workflow models
 		&models.ApprovalWorkflow{},
 		&models.ApprovalStep{},
 		&models.ApprovalRequest{},
