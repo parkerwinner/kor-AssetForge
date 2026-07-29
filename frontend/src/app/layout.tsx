@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { Toaster } from "@/components/ui/sonner";
+import { ToastContainer } from "@/components/ui/Toast";
 import { OnboardingProvider } from "@/components/onboarding/OnboardingProvider";
 
 const geistSans = Geist({
@@ -47,7 +47,7 @@ export default async function RootLayout({
             </OnboardingProvider>
           </ErrorBoundary>
         </NextIntlClientProvider>
-        <Toaster />
+        <ToastContainer />
       </body>
     </html>
   );

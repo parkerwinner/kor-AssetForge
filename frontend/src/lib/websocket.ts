@@ -1,5 +1,16 @@
 export type WSStatus = "connecting" | "connected" | "disconnected" | "error";
 
+/**
+ * Platform WebSocket endpoint. Uses `NEXT_PUBLIC_WS_URL` when set, otherwise
+ * derives it from the REST API URL (`http://host` → `ws://host/ws`).
+ */
+export function getWebSocketUrl(): string {
+  if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL;
+
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
+  return `${apiUrl.replace(/^http/, "ws")}/ws`;
+}
+
 export interface WSMessage<T = unknown> {
   type: string;
   payload: T;
