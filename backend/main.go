@@ -134,6 +134,7 @@ func main() {
 
 	// Use custom enhanced middleware
 	router.Use(
+		middleware.SecurityHeaders(),
 		middleware.VersionNegotiation(),
 		middleware.TracingMiddleware("kor-assetforge-api"),
 		handlers.RequestLogger(),

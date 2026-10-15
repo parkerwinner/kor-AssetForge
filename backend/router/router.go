@@ -88,6 +88,7 @@ func SetupRouter(db *gorm.DB) *gin.Engine {
 
 	// Use custom enhanced middleware
 	router.Use(
+		middleware.SecurityHeaders(),
 		handlers.RequestLogger(),
 		handlers.GlobalErrorHandler(),
 		middleware.RequestSizeLimiter(2<<20),
