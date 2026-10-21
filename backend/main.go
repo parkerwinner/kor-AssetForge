@@ -326,16 +326,7 @@ func main() {
 			middleware.InvalidateOnWrite(cacheManager, "kor:asset:*"),
 			middleware.InvalidateOnWriteTags(cacheManager, "asset"),
 			assetHandler.ExecuteBatch)
-		v1.POST("/batch/submit",
-			middleware.BatchValidator(),
-			authMiddleware.JWTAuth(),
-			batchHandler.SubmitBatch)
-		v1.POST("/batch/retry/:id",
-			authMiddleware.JWTAuth(),
-			batchHandler.RetryBatch)
-		v1.POST("/batch/:id/retry",
-			authMiddleware.JWTAuth(),
-			batchHandler.RetryBatch)
+		v1.POST("/batch/:id/rollback", assetHandler.RollbackBatch)
 		v1.GET("/batch/:id",
 			middleware.HTTPCache(cacheManager, 1*time.Minute, "kor:batch", nil),
 			assetHandler.GetBatchStatus)

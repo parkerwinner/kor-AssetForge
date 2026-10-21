@@ -882,7 +882,10 @@ func (h *AssetHandler) ExecuteBatch(c *gin.Context) {
 	})
 }
 
-// RollbackBatch compensates completed operations. Repeating the request is safe.
+// RollbackBatch compensates the database effects of a completed batch. It is
+// deliberately explicit about unsupported operations: silently pretending to
+// roll back an on-chain or externally-triggered operation would be unsafe.
+// POST /batch/:id/rollback
 func (h *AssetHandler) RollbackBatch(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
@@ -898,54 +901,48 @@ func (h *AssetHandler) RollbackBatch(c *gin.Context) {
 		apperrors.AbortWithError(c, apperrors.NewForbiddenError("Access denied"))
 		return
 	}
-	if batch.Status == models.BatchStatusRolledBack {
-		c.JSON(http.StatusOK, batch)
-		return
-	}
 	if batch.Status != models.BatchStatusCompleted && batch.Status != models.BatchStatusCompletedWithErrors {
 		apperrors.AbortWithError(c, apperrors.NewBadRequestError("Only completed batches can be rolled back"))
 		return
 	}
-	var results []models.BatchOperationResult
-	if err := json.Unmarshal([]byte(batch.OperationResults), &results); err != nil {
-		apperrors.AbortWithError(c, apperrors.NewInternalError("Batch results are not rollback-safe"))
+	var ops []models.BatchOperation
+	if err := json.Unmarshal([]byte(batch.Operations), &ops); err != nil {
+		apperrors.AbortWithError(c, apperrors.NewInternalError("Batch operations are invalid"))
 		return
 	}
-	tx := h.db.Begin()
-	for _, result := range results {
-		if !result.Success {
-			continue
+	for _, op := range ops {
+		if op.Type == "cancel_listing" {
+			apperrors.AbortWithError(c, apperrors.NewBadRequestError("Batches containing cancel_listing cannot be rolled back"))
+			return
 		}
-		switch result.Type {
+	}
+	tx := h.db.Begin()
+	for i, op := range ops {
+		switch op.Type {
 		case "transfer":
-			if err := tx.Where("tx_hash = ?", result.ResourceID).Delete(&models.Transaction{}).Error; err != nil {
+			if err := tx.Where("tx_hash = ?", fmt.Sprintf("batch_%d_op_%d", batch.ID, i)).Delete(&models.Transaction{}).Error; err != nil {
 				tx.Rollback()
-				apperrors.AbortWithError(c, apperrors.NewDatabaseError("Failed to roll back transfer", err))
+				apperrors.AbortWithError(c, apperrors.NewInternalError("Failed to roll back batch"))
 				return
 			}
 		case "list":
-			if err := tx.Where("listing_id = ?", result.ResourceID).Delete(&models.Listing{}).Error; err != nil {
+			if err := tx.Model(&models.Listing{}).Where("listing_id = ?", fmt.Sprintf("batch_listing_%d_%d", batch.ID, i)).Update("active", false).Error; err != nil {
 				tx.Rollback()
-				apperrors.AbortWithError(c, apperrors.NewDatabaseError("Failed to roll back listing", err))
+				apperrors.AbortWithError(c, apperrors.NewInternalError("Failed to roll back batch"))
 				return
-			}
-		case "cancel_listing":
-			if result.PreviousActive != nil {
-				if err := tx.Model(&models.Listing{}).Where("listing_id = ?", result.ResourceID).Update("active", *result.PreviousActive).Error; err != nil {
-					tx.Rollback()
-					apperrors.AbortWithError(c, apperrors.NewDatabaseError("Failed to restore listing", err))
-					return
-				}
 			}
 		}
 	}
-	if err := tx.Commit().Error; err != nil {
-		apperrors.AbortWithError(c, apperrors.NewDatabaseError("Failed to commit rollback", err))
+	if err := tx.Model(&batch).Update("status", models.BatchStatusRolledBack).Error; err != nil {
+		tx.Rollback()
+		apperrors.AbortWithError(c, apperrors.NewInternalError("Failed to mark batch rolled back"))
 		return
 	}
-	now := time.Now()
-	h.db.Model(&batch).Updates(map[string]interface{}{"status": models.BatchStatusRolledBack, "rollback_at": now, "rollback_details": "compensated completed operations"})
-	c.JSON(http.StatusOK, gin.H{"batch_id": batch.ID, "status": models.BatchStatusRolledBack})
+	if err := tx.Commit().Error; err != nil {
+		apperrors.AbortWithError(c, apperrors.NewInternalError("Failed to commit rollback"))
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Batch rolled back", "batch_id": batch.ID, "status": models.BatchStatusRolledBack})
 }
 
 // GetBatchStatus returns the status of a batch transaction

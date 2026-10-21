@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"github.com/google/uuid"
 	"net/http"
 	"strconv"
 	"sync"
@@ -86,7 +87,10 @@ func (sh *SearchHandler) Search(c *gin.Context) {
 	result.Took = tookMs
 
 	// Record analytics (fire-and-forget).
-	result.AnalyticsEventID = sh.recordAnalytics(req, result.Total, tookMs)
+	event := sh.recordAnalytics(req, result.Total, tookMs)
+	if err := sh.backend.RecordAnalytics(c.Request.Context(), &event); err != nil {
+		Logger.Warn("failed to persist search analytics", zap.Error(err))
+	}
 
 	c.JSON(http.StatusOK, result)
 }
@@ -200,28 +204,7 @@ func (sh *SearchHandler) SearchAnalytics(c *gin.Context) {
 	})
 }
 
-// RecordSearchClick attributes a result click to a previously recorded search.
-func (sh *SearchHandler) RecordSearchClick(c *gin.Context) {
-	var req struct {
-		EventID string `json:"event_id" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil || req.EventID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "event_id is required"})
-		return
-	}
-	sh.mu.Lock()
-	defer sh.mu.Unlock()
-	for _, event := range sh.analytics {
-		if event.EventID == req.EventID {
-			sh.clicks[req.EventID]++
-			c.JSON(http.StatusAccepted, gin.H{"event_id": req.EventID, "clicks": sh.clicks[req.EventID]})
-			return
-		}
-	}
-	c.JSON(http.StatusNotFound, gin.H{"error": "search event not found"})
-}
-
-func (sh *SearchHandler) recordAnalytics(req services.SearchRequest, count int64, tookMs float64) string {
+func (sh *SearchHandler) recordAnalytics(req services.SearchRequest, count int64, tookMs float64) services.SearchAnalyticsEvent {
 	filters := map[string]interface{}{}
 	if req.AssetType != "" || len(req.AssetTypes) > 0 {
 		filters["asset_type"] = fmt.Sprint(req.AssetTypes)
@@ -255,15 +238,12 @@ func (sh *SearchHandler) recordAnalytics(req services.SearchRequest, count int64
 	}
 
 	evt := services.SearchAnalyticsEvent{
-		EventID:     fmt.Sprintf("search-%d", time.Now().UnixNano()),
+		EventID:     uuid.NewString(),
 		Query:       req.Query,
 		Filters:     filters,
 		ResultCount: count,
 		TookMs:      tookMs,
 		Timestamp:   time.Now().UTC(),
-	}
-	if req.UserID != 0 {
-		evt.UserID = strconv.FormatUint(uint64(req.UserID), 10)
 	}
 
 	// Keep the last 1000 events in memory.
@@ -273,5 +253,5 @@ func (sh *SearchHandler) recordAnalytics(req services.SearchRequest, count int64
 		sh.analytics = sh.analytics[1:]
 	}
 	sh.analytics = append(sh.analytics, evt)
-	return evt.EventID
+	return evt
 }

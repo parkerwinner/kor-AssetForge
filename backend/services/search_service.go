@@ -419,9 +419,17 @@ func (s *DBSearchBackend) ReindexAll(ctx context.Context) error {
 	return nil
 }
 
-// RecordAnalytics is a no-op for the DB backend
+// RecordAnalytics persists search events so analytics survive process restarts.
 func (s *DBSearchBackend) RecordAnalytics(ctx context.Context, event *SearchAnalyticsEvent) error {
-	return nil
+	filters, err := json.Marshal(event.Filters)
+	if err != nil {
+		return fmt.Errorf("marshal search filters: %w", err)
+	}
+	return s.db.WithContext(ctx).Create(&models.SearchAnalytics{
+		EventID: event.EventID, Query: event.Query, Filters: string(filters),
+		ResultCount: event.ResultCount, TookMs: event.TookMs, UserID: event.UserID,
+		CreatedAt: event.Timestamp,
+	}).Error
 }
 
 // ---- ESSearchBackend (Elasticsearch adapter) --------------------------------
@@ -951,7 +959,7 @@ func (es *ESSearchBackend) ReindexAll(ctx context.Context) error {
 
 func (es *ESSearchBackend) RecordAnalytics(ctx context.Context, event *SearchAnalyticsEvent) error {
 	if es.client == nil {
-		return nil
+		return es.dbBackend.RecordAnalytics(ctx, event)
 	}
 
 	analyticsIndex := "search_analytics"
