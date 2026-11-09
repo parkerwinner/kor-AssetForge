@@ -16,8 +16,6 @@ go.work
 vendor/
 
 # Environment files
-.env
-.env.local
 .env.*.local
 .env.prod
 *.key
@@ -32,7 +30,6 @@ secrets/
 *.sqlite3
 
 # IDE
-.vscode/
 .idea/
 *.swp
 *.swo
@@ -61,3 +58,5 @@ issue.md
 test-results/
 playwright-report/
 contracts/test_snapshots/
+config.bat
+node_modules
