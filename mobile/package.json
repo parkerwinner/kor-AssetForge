@@ -6,12 +6,12 @@
   "scripts": {
     "android": "react-native run-android",
     "ios": "react-native run-ios",
-    "start": "react-native start",
+    "start": "node init && react-native start",
     "test": "jest",
     "lint": "tsc --noEmit",
     "format": "prettier --write src/",
-    "build:ios": "cd ios && xcodebuild -workspace KorAssetForgeMobile.xcworkspace -scheme KorAssetForgeMobile -configuration Release",
-    "build:android": "cd android && ./gradlew assembleRelease"
+    "build:ios": "node init && cd ios && xcodebuild -workspace KorAssetForgeMobile.xcworkspace -scheme KorAssetForgeMobile -configuration Release",
+    "build:android": "node init && cd android && ./gradlew assembleRelease"
   },
   "dependencies": {
     "react": "^18.2.0",
