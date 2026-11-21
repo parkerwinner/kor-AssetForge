@@ -48,7 +48,7 @@ export function WalletSetupStep({ onNext, onPrev, wallet, onWalletConnected }: W
             <p className="font-medium text-sm">Freighter Wallet</p>
             <p className="text-xs text-muted-foreground">
               kor-AssetForge uses Freighter, the official Stellar browser extension wallet.
-              If you don't have it installed, you can get it from the Chrome Web Store.
+              If you don&apos;t have it installed, you can get it from the Chrome Web Store.
             </p>
           </div>
         </div>

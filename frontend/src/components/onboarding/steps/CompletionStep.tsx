@@ -25,9 +25,9 @@ export function CompletionStep({ onComplete, walletConnected, kycStatus }: Compl
       </div>
 
       <div className="space-y-2">
-        <h2 className="text-2xl font-bold">You're All Set!</h2>
+        <h2 className="text-2xl font-bold">You&apos;re All Set!</h2>
         <p className="text-muted-foreground max-w-sm mx-auto">
-          You've completed the onboarding tour. Here's a summary of your progress:
+          You&apos;ve completed the onboarding tour. Here&apos;s a summary of your progress:
         </p>
       </div>
 

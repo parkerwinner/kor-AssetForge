@@ -107,6 +107,12 @@ jobs:
           cd frontend
           npm ci
 
+      # Issue #439: ESLint flat config (Next.js 16 + React 19 compiler rules)
+      - name: Run frontend lint
+        run: |
+          cd frontend
+          npm run lint
+
       # Issue #421: generate Next.js 16 route types, then type-check
       - name: Run frontend type check
         run: |

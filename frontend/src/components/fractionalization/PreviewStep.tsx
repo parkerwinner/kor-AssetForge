@@ -84,7 +84,7 @@ export function PreviewStep({
         <div className="mt-8 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-900/50 rounded p-4">
           <h4 className="font-semibold text-blue-900 dark:text-blue-100 mb-2">Preview Summary</h4>
           <p className="text-sm text-blue-800 dark:text-blue-200">
-            Your asset "{config.assetName}" will be divided into {config.fractionCount.toLocaleString()} tradeable fractions. 
+            Your asset &quot;{config.assetName}&quot; will be divided into {config.fractionCount.toLocaleString()} tradeable fractions. 
             Each fraction represents {fractionValue} units and will be priced at {config.pricePerFraction} stroops. 
             The total market value will be {totalValue} stroops.
           </p>

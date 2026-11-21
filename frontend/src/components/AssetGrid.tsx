@@ -7,6 +7,7 @@ import { formatAmount, truncateAddress } from '@/lib/utils'
 import { Building2, TrendingUp, Eye } from 'lucide-react'
 import Link from 'next/link'
 import { CardGridSkeleton } from '@/components/LoadingSkeleton'
+import { UserContent } from '@/components/UserContent'
 
 interface AssetGridProps {
   assets: AssetInfo[]
@@ -61,9 +62,10 @@ export function AssetGrid({ assets, isLoading, wallet }: AssetGridProps) {
           
           <CardContent className="space-y-4">
             {asset.description && (
-              <p className="text-sm text-muted-foreground line-clamp-2">
-                {asset.description}
-              </p>
+              <UserContent
+                html={asset.description}
+                className="text-sm text-muted-foreground line-clamp-2"
+              />
             )}
             
             <div className="space-y-2">

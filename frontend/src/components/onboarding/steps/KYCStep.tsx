@@ -44,7 +44,7 @@ export function KYCStep({ onNext, onPrev, walletConnected, kycStatus }: KYCStepP
           <div className="rounded-lg border p-4 space-y-3">
             <div className="flex items-center gap-2">
               <ShieldCheck className="h-5 w-5 text-primary" />
-              <span className="font-medium text-sm">What You'll Need</span>
+              <span className="font-medium text-sm">What You&apos;ll Need</span>
             </div>
             <ul className="space-y-2">
               {requirements.map((req) => (

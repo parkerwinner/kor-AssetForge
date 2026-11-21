@@ -9,6 +9,7 @@ import { OnboardingProvider } from "@/components/onboarding/OnboardingProvider";
 import { ServiceWorkerRegister } from "@/components/pwa/ServiceWorkerRegister";
 import { InstallPrompt } from "@/components/pwa/InstallPrompt";
 import { OfflineIndicator } from "@/components/pwa/OfflineIndicator";
+import { Providers } from "./providers";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -87,11 +88,13 @@ export default async function RootLayout({
           Skip to main content
         </a>
         <NextIntlClientProvider messages={messages} locale={locale}>
-          <ErrorBoundary>
-            <OnboardingProvider>
-              {children}
-            </OnboardingProvider>
-          </ErrorBoundary>
+          <Providers>
+            <ErrorBoundary>
+              <OnboardingProvider>
+                {children}
+              </OnboardingProvider>
+            </ErrorBoundary>
+          </Providers>
         </NextIntlClientProvider>
         <ToastContainer />
         <OfflineIndicator />

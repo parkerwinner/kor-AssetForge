@@ -412,7 +412,7 @@ export default function TransactionsPage() {
             className={cn(
               "w-56 shrink-0",
               "hidden md:block",
-              sidebarOpen && "!block fixed inset-0 z-40 bg-background/80 backdrop-blur md:relative md:bg-transparent md:backdrop-blur-none"
+              sidebarOpen && "block! fixed inset-0 z-40 bg-background/80 backdrop-blur md:relative md:bg-transparent md:backdrop-blur-none"
             )}
             aria-label="Transaction filters"
           >

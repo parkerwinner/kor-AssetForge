@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
+import { UserContent } from "@/components/UserContent";
 import { CheckCircle, XCircle, Clock } from "lucide-react";
 
 export interface Proposal {
@@ -72,9 +73,10 @@ export function ProposalList({ proposals, wallet, onSelect }: ProposalListProps)
                   <CardTitle className="text-base truncate">
                     Proposal #{p.proposal_id} — Asset {p.asset_id}
                   </CardTitle>
-                  <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
-                    {p.description}
-                  </p>
+                  <UserContent
+                    html={p.description}
+                    className="text-sm text-muted-foreground mt-1 line-clamp-2"
+                  />
                 </div>
                 <Badge variant={statusVariant[p.status]} className="shrink-0 flex items-center gap-1">
                   {statusIcon[p.status]}

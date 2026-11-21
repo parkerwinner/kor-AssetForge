@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
+import { UserContent } from "@/components/UserContent";
 import { toast } from "@/lib/toast";
 import { ThumbsUp, ThumbsDown, CheckCircle, XCircle, Clock } from "lucide-react";
 
@@ -75,7 +76,7 @@ export function VotePanel({ proposal, wallet, onVoted }: VotePanelProps) {
         </div>
       </CardHeader>
       <CardContent className="space-y-6">
-        <p className="text-sm leading-relaxed">{proposal.description}</p>
+        <UserContent html={proposal.description} className="text-sm leading-relaxed" />
 
         <Separator />
 

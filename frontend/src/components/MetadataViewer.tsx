@@ -3,6 +3,7 @@
 import Image from "next/image";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { UserContent } from "@/components/UserContent";
 
 interface NFTAttribute {
   trait_type: string;
@@ -65,7 +66,7 @@ export function MetadataViewer({
             </div>
           )}
           <div className="space-y-2">
-            <p className="text-sm text-muted-foreground">{metadata.description}</p>
+            <UserContent html={metadata.description} className="text-sm text-muted-foreground" />
             {metadataUri && (
               <p className="text-xs text-muted-foreground">
                 Metadata URI:{" "}

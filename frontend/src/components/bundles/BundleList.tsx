@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { UserContent } from "@/components/UserContent";
 import { toast } from "@/lib/toast";
 import { Package, Tag, ShoppingCart } from "lucide-react";
 
@@ -93,9 +94,10 @@ export function BundleList({ bundles, wallet, onUpdated }: BundleListProps) {
                     {b.name}
                   </CardTitle>
                   {b.description && (
-                    <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
-                      {b.description}
-                    </p>
+                    <UserContent
+                      html={b.description}
+                      className="text-sm text-muted-foreground mt-1 line-clamp-2"
+                    />
                   )}
                 </div>
                 <Badge variant={statusVariant[b.status]}>{b.status}</Badge>

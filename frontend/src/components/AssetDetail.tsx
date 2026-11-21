@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { UserContent } from "@/components/UserContent";
 import { PerformanceChart } from "@/components/charts/PerformanceChart";
 import { AssetAllocationChart } from "@/components/charts/AssetAllocationChart";
 import { assetApi, AssetDetail as AssetDetailType, PricePoint, OwnershipEntry, TransactionEntry, SearchResult } from "@/lib/asset-api";
@@ -108,7 +109,8 @@ export function AssetDetail({ assetId }: AssetDetailProps) {
                 </Badge>
               )}
             </div>
-            <p className="text-muted-foreground">{asset.code} - {asset.description}</p>
+            <p className="text-muted-foreground">{asset.code}</p>
+            <UserContent html={asset.description} className="text-muted-foreground" />
           </div>
         </div>
         <Button variant="outline" onClick={handleShare}>
